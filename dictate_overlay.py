@@ -75,24 +75,36 @@ _SWP_NOMOVE = 0x0002
 _SWP_NOACTIVATE = 0x0010
 _SWP_SHOWWINDOW = 0x0040
 
+import collections
+
+try:
+    import dictate_theme as theme
+except Exception:
+    theme = None
+
 # state -> (dot colour, label)
 STATES = {
-    "idle":      ("#5a5a5a", "F9 to talk"),
-    "listening": ("#ff4d4d", "listening"),
+    "idle":      ("#5a6472", "F9 to talk"),
+    "listening": ("#3ddc84", "listening"),
     "thinking":  ("#ffb020", "thinking"),
-    "typed":     ("#3ddc84", "typed"),
+    "typed":     ("#4cc2ff", "typed"),
     "cpu":       ("#ffb020", "on CPU"),
 }
 
-# Smaller and tighter after real use: the first version was too wide, with a
-# visible gap between the label and the meter that made it look unfinished.
-PILL_W = 208
+# Sized from side-by-side screenshots rather than guessed. 236x38 read well
+# but sat too large on screen in use, so everything is scaled to 80% together
+# - width, height, type and meter - because shrinking the box alone just
+# crowds the text.
+PILL_W = 189
 PILL_H = 30
 
-# Microphone meter. Speech RMS sits around 0.01-0.15 on this machine; below
-# SILENT_RMS nothing is really arriving.
-METER_BARS = 5
-METER_OFF = "#2e2e2e"
+# Microphone waveform. Speech RMS sits around 0.01-0.15 on this machine;
+# below SILENT_RMS nothing is really arriving.
+#
+# Bars show a scrolling HISTORY of recent levels, not the current level copied
+# across, which is what makes it look alive rather than like a progress bar.
+METER_BARS = 9
+METER_OFF = "#2a3140"
 METER_ON = "#3ddc84"
 METER_HOT = "#ffb020"
 SILENT_RMS = 0.002
@@ -104,9 +116,11 @@ SILENT_RMS = 0.002
 # dictation has long gaps: one logged phrase ran 22.8s for 27 words.
 SILENT_WARN_S = 3.0
 
-BG = "#161616"
-FG = "#e8e8e8"
-DIM = "#8a8a8a"
+# Slate rather than neutral grey: flat grey goes muddy against the tinted
+# surfaces Windows 11 puts behind a translucent window.
+BG = "#12151c"
+FG = "#e8edf5"
+DIM = "#8b96a8"
 
 
 class Overlay:
@@ -162,33 +176,38 @@ class Overlay:
         except tk.TclError:
             pass
 
-        wrap = tk.Frame(root, bg=BG, padx=9, pady=5)
+        wrap = tk.Frame(root, bg=BG, padx=10, pady=0)
         wrap.pack(fill="both", expand=True)
 
-        self.dot = tk.Canvas(wrap, width=10, height=10, bg=BG,
+        cy = PILL_H // 2
+        self.dot = tk.Canvas(wrap, width=7, height=PILL_H, bg=BG,
                              highlightthickness=0)
-        self._dot_id = self.dot.create_oval(1, 1, 9, 9, fill="#5a5a5a",
-                                            outline="")
-        self.dot.pack(side="left", padx=(0, 7))
+        self._dot_id = self.dot.create_oval(0, cy - 3, 6, cy + 3,
+                                            fill=STATES["idle"][0], outline="")
+        self.dot.pack(side="left", padx=(0, 8))
 
         self.label = tk.Label(wrap, text="F9 to talk", bg=BG, fg=FG,
-                              font=("Segoe UI", 9), anchor="w")
+                              font=("Segoe UI Semibold", 9), anchor="w")
         self.label.pack(side="left", fill="x", expand=True)
 
         # Live microphone meter. A muted mic and a working one look identical
         # without this, which is the single most confusing way for the tool to
         # fail: the pill says "listening" and nothing ever arrives.
-        self.meter = tk.Canvas(wrap, width=METER_BARS * 4, height=11, bg=BG,
-                               highlightthickness=0)
-        self._bars = [
-            self.meter.create_rectangle(i * 4, 3, i * 4 + 2, 11,
-                                        fill=METER_OFF, outline="")
-            for i in range(METER_BARS)]
-        self.meter.pack(side="right", padx=(5, 0))
-
         self.timer = tk.Label(wrap, text="", bg=BG, fg=DIM,
-                              font=("Consolas", 8))
-        self.timer.pack(side="right")
+                              font=("Cascadia Mono", 8))
+        self.timer.pack(side="right", padx=(7, 0))
+
+        self._meter_h = PILL_H - 12
+        self._bar_gap = 4
+        self.meter = tk.Canvas(wrap, width=METER_BARS * self._bar_gap,
+                               height=self._meter_h,
+                               bg=BG, highlightthickness=0)
+        self._bars = [self.meter.create_rectangle(0, 0, 0, 0, fill=METER_OFF,
+                                                  outline="")
+                      for _ in range(METER_BARS)]
+        self.meter.pack(side="right", padx=(8, 0))
+        self._history = collections.deque([0.0] * METER_BARS, maxlen=METER_BARS)
+        self._draw_wave()
 
         root.update_idletasks()             # foreground is taken here
         self._place(root)
@@ -196,6 +215,15 @@ class Overlay:
         self._show_without_activating(root)
         self._give_focus_back(prev_fg, root)
         self._visible = True
+
+        # Rounded corners come from the compositor, not from Tk. Verified
+        # supported on this build even for a borderless window; a machine
+        # without it simply keeps square corners.
+        if theme is not None:
+            try:
+                theme.round_corners(root)
+            except Exception:
+                pass
 
         for w in (root, wrap, self.label, self.dot, self.timer):
             w.bind("<Button-1>", self._drag_start)
@@ -351,13 +379,8 @@ class Overlay:
         # Speech is roughly 0.002 to 0.15 RMS. Square-root spreads the quiet
         # end out so normal talking fills most of the meter.
         frac = 0.0 if level <= SILENT_RMS else min(1.0, (level / 0.15) ** 0.5)
-        lit = int(round(frac * METER_BARS))
-        for i, bar in enumerate(self._bars):
-            if i < lit:
-                colour = METER_HOT if i >= METER_BARS - 1 else METER_ON
-            else:
-                colour = METER_OFF
-            self.meter.itemconfig(bar, fill=colour)
+        self._history.append(frac)
+        self._draw_wave()
 
         now = time.time()
         if level > SILENT_RMS:
@@ -377,9 +400,34 @@ class Overlay:
                     self.label.config(text="no sound - check mic",
                                       fg=METER_HOT)
 
+    def _draw_wave(self):
+        """Symmetric bars grown from a centre line, oldest on the left.
+
+        This is what people expect a voice meter to look like. The previous
+        left-to-right fill read as a battery gauge, which is why it never
+        looked like it was doing anything.
+        """
+        mid = self._meter_h / 2.0
+        for i, bar in enumerate(self._bars):
+            v = self._history[i] if i < len(self._history) else 0.0
+            if v <= 0.0:
+                # A flat centre line still reads as "connected but quiet",
+                # where an empty canvas reads as broken.
+                g = self._bar_gap
+                self.meter.coords(bar, i * g, mid - 0.75, i * g + 2, mid + 0.75)
+                self.meter.itemconfig(bar, fill=METER_OFF)
+                continue
+            half = max(1.0, v * (mid - 1))
+            g = self._bar_gap
+            self.meter.coords(bar, i * g, mid - half, i * g + 2, mid + half)
+            self.meter.itemconfig(bar, fill=METER_HOT if v > 0.92 else METER_ON)
+
     def _clear_meter(self):
-        for bar in self._bars:
-            self.meter.itemconfig(bar, fill=METER_OFF)
+        """Flatten the waveform. Clears the history too, so the next
+        recording starts from silence rather than replaying the last one."""
+        self._history.clear()
+        self._history.extend([0.0] * METER_BARS)
+        self._draw_wave()
         self._silent_since = None
 
     def _apply(self, state, detail):
@@ -391,8 +439,8 @@ class Overlay:
         self._state = state
         self.dot.itemconfig(self._dot_id, fill=colour)
         shown = detail or text
-        if len(shown) > 20:
-            shown = shown[:19] + "…"
+        if len(shown) > 17:
+            shown = shown[:16] + "…"
         self.label.config(text=shown,
                           fg=FG if state != "idle" else DIM)
 

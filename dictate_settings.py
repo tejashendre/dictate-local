@@ -1,8 +1,24 @@
-"""dictate_settings - modern settings window for Local Dictation.
+"""dictate_settings - the settings window.
 
-Two key design constraints preserved:
-1. Normal Toplevel window: Takes focus so user can type/interact comfortably.
-2. Themed with sv-ttk (Sun Valley Windows 11 controls) with clean card-based layout.
+Three things here are deliberate, and two of them were mistakes first.
+
+**Not a popup menu.** tk_popup on a WS_EX_NOACTIVATE window hangs the process:
+it grabs input that a window which cannot take focus will never receive. So
+settings open as an ordinary window, which is allowed to take focus because
+you are not dictating while you are configuring. The pill stays
+non-activating, and that is what protects your typing.
+
+**Pure ttk, never plain tk.** A screenshot of the previous version showed why:
+the window had a LIGHT GREY body behind dark content, section frames rendered
+as harsh black rectangles, and the checkboxes sat on black chips. The cause
+was mixing 31 plain `tk` widgets with 49 `ttk` ones. A `tk` widget paints its
+own background and ignores the theme entirely, and a Toplevel defaults to
+`SystemButtonFace`, which is light. Themed widgets only look right when
+everything around them is also themed, including the window itself.
+
+**Cards and switches, not label frames and tick boxes.** sv-ttk ships
+`Card.TFrame` and `Switch.TCheckbutton`, which are the actual Windows 11
+surfaces and toggles. `ttk.LabelFrame` is a Motif-era groove box and looks it.
 """
 
 import os
@@ -16,12 +32,54 @@ try:
 except Exception:
     THEMED = False
 
+try:
+    import dictate_theme as theme
+except Exception:
+    theme = None
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-ACCENT = "#38bdf8"
-ACCENT_GREEN = "#34d399"
-MUTED = "#94a3b8"
+# Sun Valley dark's own body colour. The Toplevel must be set to this by hand:
+# ttk styles it its children, never the window they sit in.
+SURFACE = "#1c1c1c"
+RAISED = "#262626"      # cards, so grouping is visible against the body
+ACCENT = "#4cc2ff"
+LIVE = "#3ddc84"
+MUTED = "#9aa4b2"
 WARN = "#fbbf24"
+
+
+def _force_dark_containers():
+    """Make ttk containers dark on a Toplevel.
+
+    sv-ttk themes the ROOT window, not other toplevels, and the difference is
+    visible rather than academic. Sampled from the framebuffer on a Toplevel:
+
+        ttk.Frame        #d9d9d9   light
+        Card.TFrame      #1c1c1c   dark
+
+    which is exactly the "light body with black cards" the window had. Setting
+    the Toplevel's own background does NOT fix it - that was tested and made
+    no difference, because a ttk widget paints itself from its style, not from
+    the window behind it. Configuring the style is what works.
+
+    Cards are given a slightly raised tone so they read as surfaces; sv-ttk
+    ships them the same colour as the body, which makes grouping invisible.
+    """
+    st = ttk.Style()
+    for name in ("TFrame", "TLabel", "TNotebook", "TRadiobutton",
+                 "TCheckbutton", "Switch.TCheckbutton", "TLabelframe",
+                 "TLabelframe.Label"):
+        try:
+            st.configure(name, background=SURFACE)
+        except Exception:
+            pass
+    try:
+        st.configure("Card.TFrame", background=RAISED)
+        # widgets sitting on a card must match the card, not the body
+        st.configure("Card.TLabel", background=RAISED)
+    except Exception:
+        pass
 
 
 class SettingsWindow:
@@ -35,8 +93,10 @@ class SettingsWindow:
 
         win = tk.Toplevel(root)
         self.win = win
-        win.title("Local Dictation Settings")
+        win.title("Local Dictation")
         win.resizable(False, False)
+        win.configure(bg=SURFACE)          # the fix for the light-grey body
+
         icon = os.path.join(HERE, "dictation.ico")
         if os.path.exists(icon):
             try:
@@ -46,229 +106,192 @@ class SettingsWindow:
         if THEMED:
             try:
                 sv_ttk.set_theme("dark")
+                _force_dark_containers()
             except Exception:
                 pass
 
-        pad = ttk.Frame(win, padding=(24, 20, 24, 18))
-        pad.grid(sticky="nsew")
+        outer = ttk.Frame(win, padding=(22, 18, 22, 18))
+        outer.pack(fill="both", expand=True)
 
-        # Header with status badges
-        header_frame = ttk.Frame(pad)
-        header_frame.grid(sticky="ew", pady=(0, 10))
+        self._build_header(outer)
 
-        title_row = ttk.Frame(header_frame)
-        title_row.pack(fill="x")
-        ttk.Label(title_row, text="Local Dictation",
-                  font=("Segoe UI Semibold", 16)).pack(side="left")
-        ttk.Label(title_row, text="  ⚡ RTX 3050 CUDA · Offline",
-                  foreground=ACCENT_GREEN,
-                  font=("Segoe UI Semibold", 9)).pack(side="left", padx=(8, 0), pady=(4, 0))
+        nb = ttk.Notebook(outer)
+        nb.pack(fill="both", expand=True, pady=(16, 0))
+        for build, title in ((self._build_speech, "  Speech  "),
+                             (self._build_words, "  My words  "),
+                             (self._build_system, "  System  ")):
+            tab = ttk.Frame(nb, padding=(4, 14, 4, 4))
+            nb.add(tab, text=title)
+            build(tab)
 
-        ttk.Label(header_frame,
-                  text="Permanently local speech-to-text. No account, no cloud quota, 0 audio leaves this PC.",
-                  foreground=MUTED,
-                  font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 0))
-
-        # Notebook tabs
-        nb = ttk.Notebook(pad)
-        nb.grid(sticky="ew", pady=(8, 0))
-        speech = ttk.Frame(nb, padding=(18, 16))
-        words = ttk.Frame(nb, padding=(18, 16))
-        system = ttk.Frame(nb, padding=(18, 16))
-        nb.add(speech, text="  🎙️ Speech & VAD  ")
-        nb.add(words, text="  📚 My Words  ")
-        nb.add(system, text="  ⚙️ System & Keys  ")
-
-        self._build_speech(speech)
-        self._build_words(words)
-        self._build_system(system)
-
-        # Status notification line
-        self.note = ttk.Label(pad, text="", foreground=WARN,
-                              wraplength=460, justify="left",
+        self.note = ttk.Label(outer, text="", foreground=MUTED,
+                              wraplength=440, justify="left",
                               font=("Segoe UI", 9))
-        self.note.grid(sticky="w", pady=(12, 0))
+        self.note.pack(fill="x", pady=(14, 0))
 
-        # Action buttons
-        btns = ttk.Frame(pad)
-        btns.grid(sticky="ew", pady=(12, 0))
-        ttk.Button(btns, text="Quit App", command=self._quit,
-                   width=11).pack(side="left")
-        
-        ttk.Button(btns, text="Close", command=self._close,
-                   width=10).pack(side="right")
-        save = ttk.Button(btns, text="Save Settings", command=self._save, width=14)
-        save.pack(side="right", padx=(0, 8))
-        if THEMED:
-            save.configure(style="Accent.TButton")
+        self._build_buttons(outer)
 
         win.update_idletasks()
         self._centre(win)
+        # Rounded corners, Mica and a dark title bar come from the compositor,
+        # and only apply once the window actually exists.
+        if theme is not None:
+            try:
+                theme.modernise(win, "window")
+            except Exception:
+                pass
         win.lift()
         win.focus_force()
+
+    # -- pieces -----------------------------------------------------------
+
+    def _build_header(self, parent):
+        row = ttk.Frame(parent)
+        row.pack(fill="x")
+        ttk.Label(row, text="Local Dictation",
+                  font=("Segoe UI Semibold", 16)).pack(side="left")
+        ttk.Label(row, text="local  ·  unlimited", foreground=LIVE,
+                  font=("Segoe UI Semibold", 9)).pack(side="right", pady=(6, 0))
+        ttk.Label(parent, text="Nothing you say leaves this machine.",
+                  foreground=MUTED,
+                  font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 0))
+
+    def _card(self, parent, title):
+        """A Windows 11 surface with a heading above it."""
+        ttk.Label(parent, text=title.upper(), foreground=MUTED,
+                  font=("Segoe UI Semibold", 8)).pack(anchor="w",
+                                                      pady=(0, 6))
+        card = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
+        card.pack(fill="x", pady=(0, 16))
+        return card
+
+    @staticmethod
+    def _on_card(widget):
+        """Match a widget to the card it sits on, so it does not show a
+        rectangle of the body colour behind its text."""
+        try:
+            widget.configure(style="Card.TLabel")
+        except Exception:
+            pass
+
+    def _slider(self, card, key, label, lo, hi, fmt, hint_for):
+        row = ttk.Frame(card)
+        row.pack(fill="x")
+        ttk.Label(row, text=label).pack(side="left")
+        value = ttk.Label(row, text="", foreground=ACCENT,
+                          font=("Cascadia Mono", 10))
+        value.pack(side="right")
+        var = tk.DoubleVar(value=self.settings.get(key, lo))
+        self.vars[key] = var
+        hint = ttk.Label(card, text="", foreground=MUTED, wraplength=400,
+                         justify="left", font=("Segoe UI", 8))
+
+        def changed(_v=None):
+            v = float(var.get())
+            value.config(text=fmt % v)
+            hint.config(text=hint_for(v))
+
+        ttk.Scale(card, from_=lo, to=hi, orient="horizontal", variable=var,
+                  command=changed).pack(fill="x", pady=(6, 4))
+        hint.pack(anchor="w")
+        changed()
+
+    def _switch(self, parent, key, label, default=True):
+        var = tk.BooleanVar(value=self.settings.get(key, default))
+        self.vars[key] = var
+        ttk.Checkbutton(parent, text=label, variable=var,
+                        style="Switch.TCheckbutton").pack(anchor="w", pady=3)
 
     # -- tabs -------------------------------------------------------------
 
     def _build_speech(self, parent):
-        # Card 1: Cleanup Level
-        card1 = ttk.LabelFrame(parent, text=" Text Polish & Cleanup ", padding=(14, 10))
-        card1.pack(fill="x", pady=(0, 10))
-
+        card = self._card(parent, "Cleanup")
         self.vars["polish"] = tk.StringVar(
             value=self.settings.get("polish", "fast"))
         for value, label in (
-                ("off", "Off  —  Type verbatim as transcribed"),
-                ("fast", "Fast  —  Remove stutters, filler words (um, uh)  [Instant / Free]"),
-                ("llm", "Full  —  Local LLM pass to tidy grammar and structure  [~2s]")):
-            ttk.Radiobutton(card1, text=label, value=value,
-                            variable=self.vars["polish"]).pack(anchor="w", pady=2)
+                ("off", "Off      type exactly what I said"),
+                ("fast", "Fast     remove um, uh, stutters   ·  free"),
+                ("llm", "Full     local model tidies each phrase   ·  ~2s")):
+            ttk.Radiobutton(card, text=label, value=value,
+                            variable=self.vars["polish"]).pack(anchor="w",
+                                                               pady=2)
 
-        # Card 2: Speed & Pause Timing
-        card2 = ttk.LabelFrame(parent, text=" Streaming & Pause Sensitivity ", padding=(14, 10))
-        card2.pack(fill="x", pady=(0, 4))
-
-        self.vars["stream"] = tk.BooleanVar(
-            value=self.settings.get("stream", True))
-        ttk.Checkbutton(card2, text="Live Streaming — Type at natural pauses while speaking",
-                        variable=self.vars["stream"]).pack(anchor="w", pady=(0, 8))
-
-        row = ttk.Frame(card2)
-        row.pack(fill="x", pady=(4, 0))
-        ttk.Label(row, text="Pause duration that ends a phrase:").pack(side="left")
-        self.pause_label = ttk.Label(row, text="", foreground=ACCENT,
-                                     font=("Segoe UI Semibold", 9))
-        self.pause_label.pack(side="right")
-        
-        self.vars["pause_s"] = tk.DoubleVar(
-            value=self.settings.get("pause_s", 0.7))
-        ttk.Scale(card2, from_=0.3, to=1.5, orient="horizontal",
-                  variable=self.vars["pause_s"], length=420,
-                  command=lambda _v: self._pause_changed()).pack(fill="x", pady=2)
-        self.pause_hint = ttk.Label(card2, text="", foreground=MUTED,
-                                    wraplength=420, justify="left",
-                                    font=("Segoe UI", 8))
-        self.pause_hint.pack(anchor="w")
-        self._pause_changed()
-
-        row2 = ttk.Frame(card2)
-        row2.pack(fill="x", pady=(10, 0))
-        ttk.Label(row2, text="Silero VAD background noise cutoff:").pack(side="left")
-        self.vad_label = ttk.Label(row2, text="", foreground=ACCENT,
-                                   font=("Segoe UI Semibold", 9))
-        self.vad_label.pack(side="right")
-        
-        self.vars["vad_threshold"] = tk.DoubleVar(
-            value=self.settings.get("vad_threshold", 0.6))
-        ttk.Scale(card2, from_=0.3, to=0.9, orient="horizontal",
-                  variable=self.vars["vad_threshold"], length=420,
-                  command=lambda _v: self._vad_changed()).pack(fill="x", pady=2)
-        self.vad_hint = ttk.Label(card2, text="", foreground=MUTED,
-                                  wraplength=420, justify="left",
-                                  font=("Segoe UI", 8))
-        self.vad_hint.pack(anchor="w")
-        self._vad_changed()
+        card = self._card(parent, "Speed")
+        self._switch(card, "stream", "Type as I pause, not only when I stop")
+        self._slider(
+            card, "pause_s", "Pause that ends a phrase", 0.3, 1.5, "%.1fs",
+            lambda v: ("Snappy, but it will cut you off mid-thought."
+                       if v <= 0.5 else
+                       "Balanced. Matches an ordinary thinking pause."
+                       if v <= 0.9 else
+                       "Patient. You lose most of the live typing."))
+        self._slider(
+            card, "vad_threshold", "Ignore background noise", 0.3, 0.9,
+            "%.2f",
+            lambda v: ("Sensitive. Picks up the room along with you."
+                       if v <= 0.45 else
+                       "Balanced. Ignores most background conversation."
+                       if v <= 0.7 else
+                       "Strict. Only close speech; may clip a soft start."))
 
     def _build_words(self, parent):
-        card = ttk.LabelFrame(parent, text=" Custom Vocabulary Biasing & Rules ", padding=(14, 10))
-        card.pack(fill="x", pady=(0, 10))
-
-        ttk.Label(card, wraplength=420, justify="left", foreground=MUTED,
+        card = self._card(parent, "Your vocabulary")
+        ttk.Label(card, wraplength=400, justify="left", foreground=MUTED,
                   font=("Segoe UI", 9),
-                  text=("Terms in vocabulary.txt are biased in Whisper decoding, "
-                        "and phonetic near-misses (e.g. Arbeitszugnis -> Arbeitszeugnis) "
-                        "are snapped cleanly without false rewrites.")
+                  text=("Terms in vocabulary.txt are fed to the model as a "
+                        "bias, and near-misses are snapped back to them. Add "
+                        "whatever it keeps getting wrong.")
                   ).pack(anchor="w", pady=(0, 10))
-
-        self.vars["vocab"] = tk.BooleanVar(
-            value=self.settings.get("vocab", True))
-        ttk.Checkbutton(card, text="Enable 3-Tier Custom Vocabulary Biasing",
-                        variable=self.vars["vocab"]).pack(anchor="w", pady=3)
-
-        self.vars["fuzzy"] = tk.BooleanVar(
-            value=self.settings.get("fuzzy", True))
-        ttk.Checkbutton(card, text="Auto-snap phonetic near-misses (Levenshtein guard 0.2)",
-                        variable=self.vars["fuzzy"]).pack(anchor="w", pady=3)
-
-        self.vars["commands"] = tk.BooleanVar(
-            value=self.settings.get("commands", True))
-        ttk.Checkbutton(card,
-                        text='Spoken punctuation & commands ("full stop", "scratch that", "cap that")',
-                        variable=self.vars["commands"]).pack(anchor="w", pady=3)
-
-        btn_row = ttk.Frame(card)
-        btn_row.pack(fill="x", pady=(12, 4))
-        ttk.Button(btn_row, text="📝 Edit vocabulary.txt",
-                   command=self._open_vocab).pack(side="left")
-        ttk.Button(btn_row, text="📜 View transcript.log",
-                   command=self._open_log).pack(side="left", padx=(8, 0))
+        self._switch(card, "vocab", "Use my vocabulary")
+        self._switch(card, "fuzzy", "Fix near-misses of my terms")
+        self._switch(card, "commands",
+                     'Spoken punctuation and "scratch that"')
+        ttk.Button(card, text="Edit my words",
+                   command=self._open_vocab).pack(anchor="w", pady=(12, 0))
 
     def _build_system(self, parent):
-        card1 = ttk.LabelFrame(parent, text=" Startup & Floating Pill ", padding=(14, 10))
-        card1.pack(fill="x", pady=(0, 10))
+        card = self._card(parent, "Startup")
+        self._switch(card, "run_at_login", "Start when Windows starts", False)
+        self._switch(card, "overlay", "Show the pill while talking")
 
-        self.vars["run_at_login"] = tk.BooleanVar(
-            value=self.settings.get("run_at_login", False))
-        ttk.Checkbutton(card1, text="Start Local Dictation automatically with Windows",
-                        variable=self.vars["run_at_login"]).pack(anchor="w", pady=2)
-
-        self.vars["overlay"] = tk.BooleanVar(
-            value=self.settings.get("overlay", True))
-        ttk.Checkbutton(card1, text="Show always-on-top mic indicator pill while talking",
-                        variable=self.vars["overlay"]).pack(anchor="w", pady=2)
-
-        card2 = ttk.LabelFrame(parent, text=" Global Hotkey & Model Architecture ", padding=(14, 10))
-        card2.pack(fill="x", pady=(0, 4))
-
-        row1 = ttk.Frame(card2)
-        row1.pack(fill="x", pady=(2, 6))
-        ttk.Label(row1, text="Activation Hotkey:").pack(side="left")
+        card = self._card(parent, "Hotkey")
         self.vars["hotkey"] = tk.StringVar(
             value=self.settings.get("hotkey", "f9"))
-        combo = ttk.Combobox(row1, textvariable=self.vars["hotkey"],
-                             width=18, values=[
-                                 "f9", "f8", "f4", "ctrl+alt+space",
-                                 "ctrl+shift+d", "alt+`", "ctrl+alt+d"])
-        combo.pack(side="right")
+        ttk.Combobox(card, textvariable=self.vars["hotkey"], width=26,
+                     values=["f9", "f8", "f4", "ctrl+alt+space",
+                             "ctrl+shift+d", "alt+`"]).pack(anchor="w")
+        ttk.Label(card, wraplength=400, justify="left", foreground=MUTED,
+                  font=("Segoe UI", 8),
+                  text=("F9 collides with Immersive Reader in Edge. It is "
+                        "suppressed so it no longer reaches Edge, but a "
+                        "combination avoids the clash entirely.")
+                  ).pack(anchor="w", pady=(6, 0))
 
-        row2 = ttk.Frame(card2)
-        row2.pack(fill="x", pady=(6, 2))
-        ttk.Label(row2, text="Whisper Model Engine:").pack(side="left")
+        card = self._card(parent, "Model")
         self.vars["model"] = tk.StringVar(
             value=self.settings.get("model", "small.en"))
-        ttk.Combobox(row2, textvariable=self.vars["model"], width=18,
+        ttk.Combobox(card, textvariable=self.vars["model"], width=26,
                      values=["small.en", "base.en", "distil-medium.en",
-                             "medium.en"]).pack(side="right")
-        
-        ttk.Label(card2, wraplength=420, justify="left", foreground=MUTED,
+                             "medium.en"]).pack(anchor="w")
+        ttk.Label(card, wraplength=400, justify="left", foreground=MUTED,
                   font=("Segoe UI", 8),
-                  text=("small.en (int8_float16) is verified optimal on this RTX 3050 GPU: "
-                        "11–16x realtime speed and zero dropped words at 150+ WPM.")
-                  ).pack(anchor="w", pady=(4, 0))
+                  text=("small.en is the right point on this GPU. base.en "
+                        "starts dropping words at your 150 wpm.")
+                  ).pack(anchor="w", pady=(6, 0))
 
-    # -- reactions --------------------------------------------------------
+    def _build_buttons(self, parent):
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=(16, 0))
+        ttk.Button(row, text="Quit app", command=self._quit,
+                   width=11).pack(side="left")
+        ttk.Button(row, text="Close", command=self._close,
+                   width=11).pack(side="right")
+        save = ttk.Button(row, text="Save", command=self._save, width=13)
+        save.pack(side="right", padx=(0, 8))
+        if THEMED:
+            save.configure(style="Accent.TButton")
 
-    def _pause_changed(self):
-        v = float(self.vars["pause_s"].get())
-        self.pause_label.config(text="%.1fs" % v)
-        if v <= 0.5:
-            hint = ("Snappy, but may cut off mid-sentence. "
-                    "Measured splitting fast real speech at 0.4s.")
-        elif v <= 0.9:
-            hint = "Balanced (Recommended). Matches an ordinary thinking pause."
-        else:
-            hint = ("Patient. Wait longer before emitting text.")
-        self.pause_hint.config(text=hint)
-
-    def _vad_changed(self):
-        v = float(self.vars["vad_threshold"].get())
-        self.vad_label.config(text="%.2f" % v)
-        if v <= 0.45:
-            hint = "Sensitive. Captures quiet whispers, but may pick up ambient room sound."
-        elif v <= 0.7:
-            hint = "Balanced (Recommended). Ignores typing and background conversations."
-        else:
-            hint = "Strict. Only close-mic clear speech. May clip soft starts."
-        self.vad_hint.config(text=hint)
+    # -- helpers ----------------------------------------------------------
 
     def _centre(self, win):
         try:
@@ -286,13 +309,6 @@ class SettingsWindow:
         except Exception:
             self.note.config(text="Could not open vocabulary.txt")
 
-    def _open_log(self):
-        try:
-            subprocess.Popen(["notepad.exe",
-                              os.path.join(HERE, "transcript.log")])
-        except Exception:
-            self.note.config(text="Could not open transcript.log")
-
     # -- actions ----------------------------------------------------------
 
     def collect(self):
@@ -306,8 +322,8 @@ class SettingsWindow:
         changed = [k for k in new if new[k] != self.settings.get(k)]
         messages = self.on_apply(new, changed) or []
         self.settings = new
-        self.note.config(text="   ".join(messages) if messages else "Settings saved successfully.",
-                         foreground=WARN if messages else ACCENT_GREEN)
+        self.note.config(text="   ".join(messages) if messages else "Saved.",
+                         foreground=WARN if messages else MUTED)
 
     def _close(self):
         try:
@@ -316,7 +332,6 @@ class SettingsWindow:
             pass
 
     def _quit(self):
-        """Shut the whole tool down."""
         self._close()
         if self.on_quit:
             self.on_quit()
