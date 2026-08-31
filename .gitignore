@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.log
+settings.json
+*.bak
+.pytest_cache/
+tests/__pycache__/
+

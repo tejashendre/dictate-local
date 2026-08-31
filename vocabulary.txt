@@ -1,0 +1,99 @@
+# Custom vocabulary for local dictation.
+#
+# These terms are fed to Whisper as an initial_prompt, which biases decoding
+# toward them. It is a soft bias, not a hard rule: it makes the right spelling
+# much more likely, it does not guarantee it.
+#
+# One term per line. Blank lines and lines starting with # are ignored.
+# Keep this list tight. Every term costs prompt budget, and a bloated prompt
+# makes ordinary transcription worse. Roughly 100 terms is the practical
+# ceiling; the loader will warn past that.
+#
+# After editing, check nothing regressed:
+#     python tests/test_vocab.py
+
+# --- job boards and platforms ---
+Naukri
+Instahyre
+iimjobs
+LinkedIn
+
+# --- schools and programmes ---
+ESCP
+DEAMIE
+
+# --- companies ---
+Zalando
+PitchBook
+Morningstar
+MicroStrategy
+Cloudflare
+
+# --- tools ---
+n8n
+
+# --- German and French terms that recur ---
+Arbeitszeugnis
+candidature spontanée
+Talent Passport
+
+# --- corrections: heard -> wanted -------------------------------------------
+# Three layers deal with a term coming out wrong, in this order:
+#
+#   1. initial_prompt biases decoding toward the terms above. Soft, and it
+#      does most of the work.
+#   2. near-miss snapping fixes spellings that are close to a term above.
+#      "Arbeitsugnis" and "Arbeitsuegnis" both land on Arbeitszeugnis without
+#      anyone writing a rule, which matters because the exact mangling varies
+#      run to run.
+#   3. these explicit rules, for what neither of the above can reach.
+#
+# So you rarely need a rule here. Add one when the misheard word is too short
+# for snapping (under 6 characters), or when it is a real English word that
+# snapping deliberately refuses to touch.
+#
+# "Deami" is the standing example: five characters, so snapping skips it.
+Deami -> DEAMIE
+Deamy -> DEAMIE
+
+# --- tools I actually say out loud, added after real dictation showed them
+# --- coming out as "Olamo" and "O-L-L-A, Amma"
+Ollama
+Whisper
+Qwen
+Gemini
+Perplexity
+Claude
+FocusLock
+Wispr Flow
+GPU
+VRAM
+API
+GitHub
+Git
+repo
+repos
+CUDA
+cuBLAS
+PyTorch
+JSON
+
+Olamo -> Ollama
+Olama -> Ollama
+Ollamo -> Ollama
+Alama -> Ollama
+
+# --- git and repo phrase rules ---
+guitar pre-po -> GitHub repo
+guitar pre po -> GitHub repo
+guitar repo -> GitHub repo
+get up repo -> GitHub repo
+Get up repo -> GitHub repo
+git hub repo -> GitHub repo
+git hub -> GitHub
+git-hub -> GitHub
+Get up -> GitHub
+get up -> GitHub
+pre-po -> repo
+pre po -> repo
+

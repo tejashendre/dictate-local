@@ -1,0 +1,38 @@
+# Local dictation dependencies. Python 3.14 on Windows.
+#
+#     python -m pip install -r requirements.txt
+#
+# Everything after this install is offline. The only other network access the
+# tool ever makes is the one-time Whisper model download on first run.
+
+faster-whisper>=1.2.1
+sounddevice>=0.5.6
+keyboard
+numpy>=2.0
+
+# Tray icon. Without these the app still runs, but the pill becomes permanently
+# visible instead of hiding when idle, because nothing else would show that the
+# tool is running.
+pystray
+Pillow
+
+# Sun Valley theme: real Windows 11 controls in the settings window. Optional -
+# without it the window still works, just with plain tk widgets, which look
+# like 1998 no matter how carefully the colours are chosen.
+sv-ttk
+
+# CUDA runtime for the GPU path.
+#
+# ctranslate2 ships cudnn64_9.dll but NOT cublas64_12.dll, and this machine had
+# no CUDA toolkit, so the GPU path failed. It failed in a way worth knowing
+# about: WhisperModel(...) constructed fine on CUDA and the process only fell
+# over later inside transcribe(), when the encoder first touched cuBLAS.
+#
+# dictate_core.enable_cuda_dlls() puts this wheel's directory on PATH before
+# faster_whisper is imported. os.add_dll_directory is NOT enough - ctranslate2
+# loads the DLL with a plain LoadLibrary, which searches PATH.
+#
+# Roughly 630 MB installed. Skip it and set DICTATE_DEVICE=cpu if you do not
+# want the GPU path; everything still works, at about 2.5x realtime instead
+# of 11x.
+nvidia-cublas-cu12
