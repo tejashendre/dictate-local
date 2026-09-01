@@ -17,7 +17,6 @@ Contents:
 import os
 import re
 import site
-import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VOCAB_PATH = os.path.join(HERE, "vocabulary.txt")

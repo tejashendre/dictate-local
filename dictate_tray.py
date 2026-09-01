@@ -19,6 +19,8 @@ full tkinter mainloop and vice versa.
 
 import threading
 
+import dictate_theme as theme
+
 try:
     import pystray
     from PIL import Image, ImageDraw
@@ -28,11 +30,11 @@ except Exception:                       # pystray or Pillow missing
 
 # state -> (ring colour, fill colour, tooltip)
 LOOK = {
-    "idle":      ("#8a8a8a", None,      "Local Dictation - press F9 to talk"),
-    "listening": ("#ff4d4d", "#ff4d4d", "Listening..."),
-    "thinking":  ("#ffb020", "#ffb020", "Transcribing..."),
-    "typed":     ("#3ddc84", "#3ddc84", "Typed"),
-    "cpu":       ("#ffb020", None,      "Local Dictation - running on CPU"),
+    "idle":      (theme.DIM,  None,       "Local Dictation - press F9 to talk"),
+    "listening": (theme.ERR,  theme.ERR,  "Listening..."),
+    "thinking":  (theme.BUSY, theme.BUSY, "Transcribing..."),
+    "typed":     (theme.LIVE, theme.LIVE, "Typed"),
+    "cpu":       (theme.BUSY, None,       "Local Dictation - running on CPU"),
 }
 
 

@@ -71,16 +71,12 @@ _SW_HIDE = 0
 _SW_SHOWNOACTIVATE = 4
 _HWND_TOPMOST = -1
 _SWP_NOSIZE = 0x0001
-_SWP_NOMOVE = 0x0002
 _SWP_NOACTIVATE = 0x0010
 _SWP_SHOWWINDOW = 0x0040
 
 import collections
 
-try:
-    import dictate_theme as theme
-except Exception:
-    theme = None
+import dictate_theme as theme
 
 # Tk's canvas has no anti-aliasing: a 6-pixel create_oval draws a visible
 # octagon, and the meter bars come out with hard jagged edges. Both are obvious
@@ -103,11 +99,11 @@ SUPERSAMPLE = 4
 # was reported as "the bot disappearing into a blue dot, I do not know what it
 # means" - which is a fair complaint about a status indicator.
 STATES = {
-    "idle":      ("#5a6472", "F9 to talk"),
-    "listening": ("#3ddc84", "listening"),
-    "thinking":  ("#ffb020", "writing it"),
-    "typed":     ("#4cc2ff", "done"),
-    "cpu":       ("#ffb020", "on CPU"),
+    "idle":      (theme.IDLE,   "F9 to talk"),
+    "listening": (theme.LIVE,   "listening"),
+    "thinking":  (theme.BUSY,   "writing it"),
+    "typed":     (theme.ACCENT, "done"),
+    "cpu":       (theme.BUSY,   "on CPU"),
 }
 
 # One size, and it stays that way.
@@ -125,9 +121,8 @@ PILL_H = 30
 # Bars show a scrolling HISTORY of recent levels, not the current level copied
 # across, which is what makes it look alive rather than like a progress bar.
 METER_BARS = 9
-METER_OFF = "#2a3140"
-METER_ON = "#3ddc84"
-METER_HOT = "#ffb020"
+METER_OFF = theme.BORDER
+METER_HOT = theme.BUSY
 SILENT_RMS = 0.002
 # How long of nothing before saying the microphone is not being heard.
 #
@@ -138,12 +133,13 @@ SILENT_RMS = 0.002
 SILENT_WARN_S = 3.0
 
 # Slate rather than neutral grey: flat grey goes muddy against the tinted
-# surfaces Windows 11 puts behind a translucent window.
-BG = "#12151c"        # bottom of the gradient
-BG_TOP = "#1b2029"    # top of the gradient, slightly lifted
-EDGE = "#2c3442"      # the lit hairline along the top edge
-FG = "#e8edf5"
-DIM = "#8b96a8"
+# surfaces Windows 11 puts behind a translucent window. All of it comes from
+# dictate_theme so the pill and the settings window cannot drift apart.
+BG = theme.BG          # bottom of the gradient
+BG_TOP = theme.BG_TOP  # top of the gradient, slightly lifted
+EDGE = theme.EDGE      # the lit hairline along the top edge
+FG = theme.FG
+DIM = theme.DIM
 
 
 class Overlay:

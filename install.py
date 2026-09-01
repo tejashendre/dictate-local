@@ -43,16 +43,18 @@ def make_icon(path=ICON):
         from PIL import Image, ImageDraw
     except ImportError:
         return False
+    import dictate_theme as theme
+    field, mic = theme.rgb(theme.SURFACE) + (255,), theme.rgb(theme.LIVE) + (255,)
     sizes = [256, 128, 64, 48, 32, 16]
     base = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
     d = ImageDraw.Draw(base)
     # A microphone capsule on a dark rounded field: reads at 16px, which is
     # the size that actually matters in a taskbar.
-    d.rounded_rectangle((8, 8, 248, 248), radius=56, fill=(22, 22, 22, 255))
-    d.rounded_rectangle((104, 56, 152, 148), radius=24, fill=(61, 220, 132, 255))
-    d.arc((76, 96, 180, 188), start=0, end=180, fill=(61, 220, 132, 255), width=14)
-    d.line((128, 188, 128, 212), fill=(61, 220, 132, 255), width=14)
-    d.line((100, 212, 156, 212), fill=(61, 220, 132, 255), width=14)
+    d.rounded_rectangle((8, 8, 248, 248), radius=56, fill=field)
+    d.rounded_rectangle((104, 56, 152, 148), radius=24, fill=mic)
+    d.arc((76, 96, 180, 188), start=0, end=180, fill=mic, width=14)
+    d.line((128, 188, 128, 212), fill=mic, width=14)
+    d.line((100, 212, 156, 212), fill=mic, width=14)
     base.save(path, format="ICO",
               sizes=[(s, s) for s in sizes])
     return os.path.exists(path)

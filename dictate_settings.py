@@ -32,21 +32,18 @@ try:
 except Exception:
     THEMED = False
 
-try:
-    import dictate_theme as theme
-except Exception:
-    theme = None
+import dictate_theme as theme
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Sun Valley dark's own body colour. The Toplevel must be set to this by hand:
 # ttk styles it its children, never the window they sit in.
-SURFACE = "#1c1c1c"
-RAISED = "#262626"      # cards, so grouping is visible against the body
-ACCENT = "#4cc2ff"
-LIVE = "#3ddc84"
-MUTED = "#9aa4b2"
-WARN = "#fbbf24"
+SURFACE = theme.SURFACE
+RAISED = theme.RAISED    # cards, so grouping is visible against the body
+ACCENT = theme.ACCENT
+LIVE = theme.LIVE
+MUTED = theme.MUTED
+WARN = theme.WARN
 
 
 def _force_dark_containers():
@@ -164,15 +161,6 @@ class SettingsWindow:
         card = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
         card.pack(fill="x", pady=(0, 16))
         return card
-
-    @staticmethod
-    def _on_card(widget):
-        """Match a widget to the card it sits on, so it does not show a
-        rectangle of the body colour behind its text."""
-        try:
-            widget.configure(style="Card.TLabel")
-        except Exception:
-            pass
 
     def _slider(self, card, key, label, lo, hi, fmt, hint_for):
         row = ttk.Frame(card)

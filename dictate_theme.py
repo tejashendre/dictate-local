@@ -22,8 +22,16 @@ happen to ship together.
 import ctypes
 from ctypes import wintypes
 
-_dwm = ctypes.windll.dwmapi
-_u32 = ctypes.windll.user32
+
+# Resolved on first use rather than at import. The palette below is the single
+# source of colour for the whole app, and importing it must never depend on
+# dwmapi being loadable - otherwise every consumer needs a fallback copy of the
+# colours, which is exactly the duplication this module exists to prevent.
+def _lib(name):
+    try:
+        return getattr(ctypes.windll, name)
+    except Exception:
+        return None
 
 # DWM window attributes
 _DARK_MODE = 20
@@ -47,7 +55,6 @@ BACKDROP_NONE, BACKDROP_MICA, BACKDROP_ACRYLIC, BACKDROP_MICA_ALT = 1, 2, 3, 4
 
 SURFACE   = "#1c1c1c"     # settings window body, matches sv-ttk dark
 BG        = "#12151c"     # pill body
-BG_SOFT   = "#1a1f29"     # raised surface
 BORDER    = "#2a3140"
 FG        = "#e8edf5"
 DIM       = "#8b96a8"
@@ -55,13 +62,31 @@ DIM       = "#8b96a8"
 ACCENT    = "#4cc2ff"     # Windows 11 system accent blue
 LIVE      = "#3ddc84"     # hearing you
 BUSY      = "#ffb020"     # working
-IDLE      = "#5a6472"
+IDLE      = "#5a6472"     # nothing happening
+ERR       = "#ff4d4d"     # something is wrong
+
+# Surfaces that only one window uses, kept here anyway so that changing the
+# look means editing this file and nothing else.
+RAISED    = "#262626"     # settings cards, lifted off SURFACE
+BG_TOP    = "#1b2029"     # top of the pill gradient
+EDGE      = "#2c3442"     # lit hairline along the pill's top edge
+MUTED     = "#9aa4b2"     # settings secondary text
+WARN      = "#fbbf24"
+
+
+def rgb(hex_colour):
+    """(r, g, b) for the drawing code, which works in tuples not strings."""
+    h = hex_colour.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
 def _set(hwnd, attr, value):
     try:
         val = ctypes.c_int(int(value))
-        return _dwm.DwmSetWindowAttribute(
+        dwm = _lib("dwmapi")
+        if dwm is None:
+            return False
+        return dwm.DwmSetWindowAttribute(
             wintypes.HWND(hwnd), wintypes.DWORD(attr),
             ctypes.byref(val), ctypes.sizeof(val)) == 0
     except Exception:
@@ -72,7 +97,8 @@ def hwnd_of(widget):
     """The real toplevel handle behind a Tk widget."""
     try:
         wid = widget.winfo_id()
-        return _u32.GetParent(wid) or wid
+        u32 = _lib("user32")
+        return (u32.GetParent(wid) or wid) if u32 else wid
     except Exception:
         return None
 
