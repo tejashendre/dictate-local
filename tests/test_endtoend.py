@@ -127,6 +127,96 @@ class _Collector(ast.NodeVisitor):
                     self.used.append((fn.name, node.id, node.lineno))
 
 
+def test_use_before_assignment():
+    """A local used before the line that defines it.
+
+    This shipped and crashed the app on startup:
+
+        threading.Thread(target=_watch_for_resume, args=(quit_evt,))  # line 586
+        quit_evt = threading.Event()                                  # line 590
+
+        UnboundLocalError: cannot access local variable 'quit_evt'
+
+    The name check above could not see it, because that only asks whether a
+    name exists ANYWHERE in the function, not whether it exists YET. Python
+    binds the whole function body, so the name resolves and the order is what
+    is wrong.
+
+    Only straight-line statements at the top level of a function are checked.
+    Anything inside a loop, an if, or a try legitimately reads names assigned
+    further down the source, so flagging those would be noise.
+    """
+    print("\n  2. no local is used before the line that assigns it")
+    ok = True
+    for fname in MODULES:
+        src = io.open(os.path.join(ROOT, fname), encoding="utf-8").read()
+        problems = []
+        for fn in ast.walk(ast.parse(src)):
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                problems += _straight_line_problems(fn)
+        ok &= check("%-22s clean" % fname, not problems,
+                    "; ".join("%s uses %r on line %d, assigned on %d"
+                              % p for p in problems[:3]))
+
+    # A check that never fires proves nothing. Feed it the exact shape that
+    # crashed the app and confirm it is caught, and a correct version and
+    # confirm it is not.
+    bad = ast.parse("def f():\n    go(quit_evt)\n    quit_evt = 1\n").body[0]
+    good = ast.parse("def f():\n    quit_evt = 1\n    go(quit_evt)\n").body[0]
+    ok &= check("catches the real bug when shown it",
+                len(_straight_line_problems(bad)) == 1,
+                str(_straight_line_problems(bad)))
+    ok &= check("and stays quiet on the corrected version",
+                not _straight_line_problems(good))
+    return ok
+
+
+def _straight_line_problems(fn):
+    """Only the plainest case, because everything else is legitimately out of
+    order.
+
+    A closure reads its parent's locals when it is CALLED, not where it is
+    written. A loop body reads names bound by the loop. A branch reads names
+    assigned in the other branch. All three are fine, and all three produced
+    false positives on the first attempt at this check.
+
+    What is never fine is a straight-line statement reading a name that a
+    LATER straight-line statement assigns - exactly the shape that crashed the
+    app on startup.
+    """
+    top_assign = {}
+    for stmt in fn.body:
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            for t in ast.walk(stmt):
+                if isinstance(t, ast.Name) and isinstance(t.ctx, ast.Store):
+                    top_assign.setdefault(t.id, t.lineno)
+
+    params = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+    declared_global = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Global):
+            declared_global.update(node.names)
+
+    skip = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.For,
+            ast.AsyncFor, ast.While, ast.If, ast.Try, ast.With, ast.AsyncWith)
+    problems = []
+    for stmt in fn.body:
+        if isinstance(stmt, skip):
+            continue                     # not straight-line
+        for node in ast.walk(stmt):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.Lambda)):
+                continue                 # a closure runs later, not here
+            if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+                    and node.id in top_assign
+                    and node.id not in params
+                    and node.id not in declared_global
+                    and node.lineno < top_assign[node.id]):
+                problems.append((fn.name, node.id, node.lineno,
+                                 top_assign[node.id]))
+    return problems
+
+
 def test_names_resolve():
     print("\n  1. every global referenced inside a function exists")
     ok = True
@@ -262,8 +352,8 @@ def test_settings_reach_runtime():
 
 
 def main():
-    results = [test_names_resolve(), test_settings_reach_runtime(),
-               test_record_paths()]
+    results = [test_names_resolve(), test_use_before_assignment(),
+               test_settings_reach_runtime(), test_record_paths()]
     print("\n  %s" % ("PASS" if all(results) else "FAIL"))
     return 0 if all(results) else 1
 

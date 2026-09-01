@@ -582,12 +582,14 @@ def main():
                              blocksize=1024)
     _stream.start()
     stream = _stream
-
-    threading.Thread(target=_watch_for_resume, args=(quit_evt,),
-                     daemon=True).start()
     globals()["_audio_stream"] = stream
 
     quit_evt = threading.Event()
+
+    # Started only after quit_evt exists. An earlier version launched it above
+    # the definition and the app died on startup with UnboundLocalError.
+    threading.Thread(target=_watch_for_resume, args=(quit_evt,),
+                     daemon=True).start()
 
     if USE_OVERLAY:
         # tkinter must own the main thread, so the hotkey loop moves onto a
