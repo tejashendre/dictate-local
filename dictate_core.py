@@ -270,6 +270,96 @@ def has_speech(audio, min_seconds=MIN_SPEECH_SECONDS, sample_rate=16000,
         return True, len(audio) / sample_rate      # never block on a VAD fault
 
 
+# --------------------------------------------------------------------------
+# Telling your voice from the room
+# --------------------------------------------------------------------------
+#
+# Silero VAD answers "is this speech", not "is this the person at the mic",
+# and measured here it passes a television at every level tested:
+#
+#     background at 100% of your level   -> transcribed
+#     background at  35%                 -> transcribed
+#     background at   8%                 -> transcribed
+#
+# Content cannot separate them - a news reader is speaking just as validly as
+# you are. Loudness can: a voice across the room arrives far quieter at your
+# microphone than your own mouth does.
+#
+# Overlapping background is already handled - when you are talking over it,
+# Whisper locks onto the dominant speaker and the television does not appear.
+# The leak is background during a PAUSE, when yours is the only voice missing.
+#
+# So the gate is relative, not absolute: learn how loud YOU are, and reject
+# audio far below it. Relative because an absolute threshold would depend on
+# the microphone, the gain and how close you sit - none of which are knowable
+# in advance, and all of which this learns by watching.
+
+GATE_RATIO = 0.35          # below this fraction of your voice, treat as room
+GATE_MIN_SAMPLES = 4       # do not gate until your level is actually known
+
+
+def speech_rms(audio, sample_rate=16000, threshold=None):
+    """Loudness of the SPEECH in this audio, ignoring the silence around it.
+
+    Plain RMS over the whole buffer would score a short loud phrase the same
+    as a long quiet one, because the silence drags the average down.
+    """
+    if audio is None or len(audio) == 0:
+        return 0.0
+    try:
+        from faster_whisper.vad import get_speech_timestamps, VadOptions
+        regions = get_speech_timestamps(
+            audio, VadOptions(
+                threshold=threshold if threshold is not None else 0.6,
+                min_silence_duration_ms=200, speech_pad_ms=100))
+        if not regions:
+            return 0.0
+        import numpy as _np
+        parts = [audio[r["start"]:r["end"]] for r in regions]
+        joined = _np.concatenate(parts) if parts else _np.zeros(1)
+        return float(_np.sqrt(_np.mean(_np.square(joined))))
+    except Exception:
+        import numpy as _np
+        return float(_np.sqrt(_np.mean(_np.square(audio))))
+
+
+class VoiceLevel:
+    """Learns how loud you are, so the room can be told apart from you.
+
+    Keeps a median of recent accepted phrases rather than a mean: one shout
+    or one whisper should not move the gate, and a median ignores both.
+    """
+
+    def __init__(self, samples=None, ratio=GATE_RATIO):
+        self.samples = list(samples or [])
+        self.ratio = ratio
+
+    @property
+    def level(self):
+        if not self.samples:
+            return None
+        ordered = sorted(self.samples)
+        return ordered[len(ordered) // 2]
+
+    def learn(self, rms):
+        """Record a phrase that was accepted as yours."""
+        if rms and rms > 0:
+            self.samples.append(float(rms))
+            del self.samples[:-25]          # recent history only
+
+    def is_background(self, rms):
+        """True if this is too quiet to be you. Returns (verdict, threshold).
+
+        Refuses to judge until it has heard you enough times - guessing early
+        would reject your first few phrases, which is the worst possible first
+        impression.
+        """
+        if len(self.samples) < GATE_MIN_SAMPLES or not rms:
+            return False, None
+        floor = self.level * self.ratio
+        return rms < floor, floor
+
+
 def collapse_repetition(text):
     """Collapse Whisper's repetition loop.
 

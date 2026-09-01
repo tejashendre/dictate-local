@@ -225,6 +225,8 @@ class SettingsWindow:
                        "Balanced. Matches an ordinary thinking pause."
                        if v <= 0.9 else
                        "Patient. You lose most of the live typing."))
+        self._switch(card, "noise_gate",
+                     "Ignore voices quieter than mine (a TV, the next room)")
         self._slider(
             card, "vad_threshold", "Ignore background noise", 0.3, 0.9,
             "%.2f",

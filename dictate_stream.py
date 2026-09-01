@@ -108,7 +108,8 @@ class StreamingSession:
 
     def __init__(self, transcriber, prompt=None, vad_options=None,
                  pause_s=PAUSE_S, force_after_s=FORCE_AFTER_S,
-                 max_buffer_s=MAX_BUFFER_S, vad_threshold=None):
+                 max_buffer_s=MAX_BUFFER_S, vad_threshold=None,
+                 gate=None):
         self.transcriber = transcriber
         self.prompt = prompt
         self.pause_s = pause_s
@@ -135,6 +136,12 @@ class StreamingSession:
         self.last_speech_s = 0.0
         self.dropped_fillers = 0
         self.dropped_repeats = 0
+        # Called with the phrase audio before transcribing. Returns True when
+        # this is the room rather than the speaker. Lives here rather than
+        # only in the batch path because streaming is the default, and a guard
+        # that only covers the path nobody uses is not a guard.
+        self.gate = gate
+        self.dropped_background = 0
 
     # -- input ------------------------------------------------------------
 
@@ -226,8 +233,15 @@ class StreamingSession:
         """
         self.last_phrase_s = self.seconds
         self.last_speech_s = self._speech_seconds(self._speech_regions())
-        text = self._transcribe()
 
+        # Check before transcribing, not after: it saves the GPU pass and it
+        # means background never reaches the typing path at all.
+        if self.gate is not None and self.gate(self.buf):
+            self.dropped_background += 1
+            self._reset()
+            return []
+
+        text = self._transcribe()
         text, repeats = _core().collapse_repetition(text)
         if repeats:
             self.dropped_repeats += repeats

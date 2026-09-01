@@ -32,6 +32,11 @@ SCHEMA = {
                      "Type as you pause, instead of only when you stop"),
     "pause_s":      (0.7,        "DICTATE_PAUSE",    False,
                      "Silence that ends a phrase, in seconds"),
+    "voice_level":  (0.0,        None,               False,
+                     "Learned loudness of your voice. Set automatically; "
+                     "0 means not learned yet"),
+    "noise_gate":   (True,       "DICTATE_GATE",     False,
+                     "Ignore voices quieter than yours, such as a television"),
     "vad_threshold": (0.6,       "DICTATE_VAD",      False,
                       "How strict to be about what counts as speech. Higher "
                       "ignores more background noise"),

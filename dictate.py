@@ -106,6 +106,13 @@ USE_FUZZY = CFG["fuzzy"]
 POLISH = CFG["polish"]
 PAUSE_S = CFG["pause_s"]
 VAD_THRESHOLD = CFG["vad_threshold"]
+USE_GATE = CFG["noise_gate"]
+
+# Learns how loud you are, so a television can be told from you. Seeded from
+# the last run, so the gate works on the first phrase rather than needing to
+# hear you four times again every launch.
+_voice = core.VoiceLevel([CFG["voice_level"]] * core.GATE_MIN_SAMPLES
+                         if CFG.get("voice_level") else [])
 USE_OVERLAY = CFG["overlay"]
 HIDE_CONSOLE = CFG["hide_console"]
 HOTKEY = CFG["hotkey"]
@@ -171,6 +178,7 @@ def apply_settings(new, changed):
     USE_FUZZY = bool(new["fuzzy"])
     globals()["VAD_THRESHOLD"] = float(new.get("vad_threshold", 0.6))
     USE_COMMANDS = bool(new["commands"])
+    globals()["USE_GATE"] = bool(new.get("noise_gate", True))
 
     if POLISH == "llm":
         ok, _names = dictate_polish.llm_available()
@@ -193,6 +201,42 @@ def apply_settings(new, changed):
     except Exception as e:
         messages.append("Could not save settings: %s" % e)
     return messages
+
+
+def _gate_phrase(audio):
+    """True when this phrase is the room rather than you.
+
+    Shared by both the batch and streaming paths, so they cannot drift apart -
+    the last two guards were added to one path only and the other kept the bug.
+    """
+    loudness = core.speech_rms(audio, threshold=VAD_THRESHOLD)
+    background, floor = _voice.is_background(loudness)
+    if background:
+        print("  too quiet to be you (%.4f, floor %.4f), ignored as room noise"
+              % (loudness, floor))
+        return True
+    _voice.learn(loudness)
+    _remember_voice_level()
+    return False
+
+
+def _remember_voice_level():
+    """Save the learned level, but only when it has actually moved.
+
+    Writing settings.json on every phrase would be a lot of disk for a number
+    that barely changes.
+    """
+    level = _voice.level
+    if not level:
+        return
+    stored = CFG.get("voice_level") or 0.0
+    if stored and abs(level - stored) / max(stored, 1e-9) < 0.10:
+        return
+    try:
+        CFG["voice_level"] = round(level, 5)
+        dictate_config.save(CFG)
+    except Exception:
+        pass
 
 
 def key_finder():
@@ -345,6 +389,9 @@ def transcribe_and_type(model, audio, held, prompt=None, rules=(), terms=()):
     # produced "Thank you for watching." from half a second of near-silence,
     # which would have been typed into whatever window was focused.
     speaking, speech_s = core.has_speech(audio, threshold=VAD_THRESHOLD)
+    if speaking and USE_GATE and _gate_phrase(audio):
+        set_state("idle")
+        return
     if not speaking:
         print("  no speech in that (%.1fs of sound), ignored" % speech_s)
         set_state("idle")
@@ -472,6 +519,10 @@ def main():
     except Exception:
         mic = "unknown"
     print("  mic    : %s" % mic)
+    if USE_GATE:
+        known = CFG.get("voice_level") or 0
+        print("  room   : quieter voices ignored%s"
+              % ("" if known else " once it has learnt your level"))
     battery, pct = core.on_battery()
     if battery:
         print("  power  : on battery%s. The GPU still runs but Windows clocks "
@@ -646,7 +697,8 @@ def hotkey_loop(model, prompt, rules, terms, quit_evt):
                 if USE_STREAM:
                     session = dictate_stream.StreamingSession(
                         model, prompt=prompt, pause_s=PAUSE_S,
-                        vad_threshold=VAD_THRESHOLD)
+                        vad_threshold=VAD_THRESHOLD,
+                        gate=_gate_phrase if USE_GATE else None)
                     stop_evt = threading.Event()
                     worker = threading.Thread(
                         target=stream_worker,
