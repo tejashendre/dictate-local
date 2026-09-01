@@ -1005,6 +1005,51 @@ class Transcriber:
 
     # -- use --------------------------------------------------------------
 
+    def reload_after_resume(self):
+        """Rebuild the model after the machine has slept.
+
+        Sleep destroys the CUDA context. The old model object still holds a
+        handle to it, and touching that handle does not raise a Python error -
+        it kills the process in native code. Confirmed from the Windows
+        Application log after a lid-open:
+
+            Faulting module : ucrtbase.dll
+            Exception code  : 0xc0000409   STATUS_STACK_BUFFER_OVERRUN
+
+        There is no traceback for that and no except clause that can catch it,
+        which is why the earlier fallback-to-CPU did not save it: the retry
+        was itself a touch of the dead context.
+
+        The old model is deliberately NOT freed. Releasing it would call into
+        the same dead context to tear down its buffers - the exact thing that
+        crashes. Leaking about 500 MB once per sleep is a far better trade
+        than losing the process, and the memory is reclaimed on next launch.
+        """
+        from faster_whisper import WhisperModel
+        old = self.model
+        device, compute, reason = plan_device(self.model_name)
+        try:
+            fresh = WhisperModel(self.model_name, device=device,
+                                 compute_type=compute)
+            import numpy as _np
+            list(fresh.transcribe(_np.zeros(8000, dtype=_np.float32),
+                                  language="en", beam_size=1)[0])
+        except Exception as e:
+            self.on_event("could not rebuild on %s after sleep (%s), using CPU"
+                          % (device, type(e).__name__))
+            try:
+                fresh = WhisperModel(self.model_name, device="cpu",
+                                     compute_type="int8")
+                device, compute = "cpu", "int8"
+            except Exception:
+                return False
+
+        self.model, self.device, self.compute = fresh, device, compute
+        self.degraded = (device == "cpu")
+        del old              # drops our reference; never .close() or free it
+        self.on_event("model rebuilt after sleep on %s (%s)" % (device, reason))
+        return True
+
     def transcribe(self, audio, prompt=None):
         """Transcribe, retrying on CPU if the GPU path fails.
 

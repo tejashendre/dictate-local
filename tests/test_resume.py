@@ -118,7 +118,54 @@ def main():
                     not dictate._rec.is_set())
     ok_all &= check("stale audio dropped", dictate._q.empty())
 
-    print("\n  4. the watchdog survives a failure inside re-arming")
+    print("\n  4. the model is rebuilt on wake, before anything transcribes")
+    # Sleep destroys the CUDA context. Touching the old model afterwards kills
+    # the process in native code - ucrtbase.dll, exception 0xc0000409 - with no
+    # Python traceback and nothing to catch. So the rebuild has to happen on
+    # wake, and it must not free the old model, because freeing it is itself a
+    # touch of the dead context.
+    order = []
+
+    class _FakeModel:
+        device = "cuda"
+
+        def reload_after_resume(self):
+            order.append("reload")
+            return True
+
+    real_model = dictate._model
+    dictate._model = _FakeModel()
+    dictate._rearm = lambda: order.append("rearm")
+    quitm = threading.Event()
+    tm = threading.Thread(target=dictate._watch_for_resume, args=(quitm,),
+                          kwargs={"tick": 0.15, "gap": 0.4}, daemon=True)
+    tm.start()
+    time.time = lambda: real_time() + 3 * 3600.0
+    time.sleep(0.5)
+    time.time = real_time
+    quitm.set()
+    time.sleep(0.3)
+    dictate._model = real_model
+    dictate._rearm = real_rearm
+    ok_all &= check("the model is rebuilt on wake", "reload" in order,
+                    str(order))
+    ok_all &= check("rebuilt BEFORE the hotkey and mic are re-armed",
+                    order[:2] == ["reload", "rearm"], str(order))
+
+    print("\n  5. rebuilding never frees the old model")
+    src = open(os.path.join(ROOT, "dictate_core.py"), encoding="utf-8").read()
+    body = src[src.index("def reload_after_resume"):
+               src.index("def transcribe", src.index("def reload_after_resume"))]
+    # Strip comments before looking for calls: the code says "never .close()"
+    # in prose, and matching that would be a false positive.
+    code_only = "\n".join(ln.split("#")[0] for ln in body.split("\n"))
+    ok_all &= check("no close() or unload() against the dead context",
+                    ".close()" not in code_only
+                    and ".unload()" not in code_only)
+    ok_all &= check("the old reference is only dropped, never released",
+                    "del old" in body)
+
+    print("\n  6. the watchdog survives a failure inside re-arming")
     # A dead watchdog fails as silently as the bug it exists to fix, so it
     # must outlive anything that throws inside it.
     boom = {"n": 0}

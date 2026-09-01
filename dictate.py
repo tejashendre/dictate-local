@@ -131,6 +131,7 @@ _last_typed = ""     # what emit() last sent, so "scratch that" can undo it
 _level = 0.0         # live microphone loudness, drives the pill meter
 _toggle = threading.Event()   # set by the hotkey; watched by the hotkey loop
 _stream = None                # the live audio stream, so resume can replace it
+_model = None                 # the transcriber, so resume can rebuild it
 _target_hwnd = None  # the window that had focus when recording started
 _target_title = ""
 
@@ -568,7 +569,10 @@ def main():
                   % ("resident" if loaded else "preload failed", secs))
 
     t0 = time.time()
-    model = core.Transcriber(MODEL_NAME, on_event=lambda m: print("  " + m)).load()
+    global _model
+    _model = core.Transcriber(MODEL_NAME,
+                              on_event=lambda m: print("  " + m)).load()
+    model = _model
     print("  ready in %.1fs on %s" % (time.time() - t0, model.device))
     if model.degraded:
         print("  note   : CPU is roughly 5x slower than the GPU here. Long "
@@ -709,6 +713,12 @@ def _watch_for_resume(quit_evt, tick=5.0, gap=60.0):
             try:
                 _rec.clear()
                 drain()
+                # Rebuild the model FIRST. Sleep destroys the CUDA context,
+                # and the next transcribe against it kills the process in
+                # native code - no traceback, nothing to catch. Everything
+                # else can wait; this cannot.
+                if _model is not None:
+                    _model.reload_after_resume()
                 _rearm()
                 set_state("idle")
             except Exception as e:
