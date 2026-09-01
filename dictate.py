@@ -122,6 +122,15 @@ os.environ.setdefault("DICTATE_DEVICE", DEVICE_PREF)
 MAX_BACKSPACE = 400
 SAMPLE_RATE = 16000
 MIN_SECONDS = 0.4
+
+# A recording nobody stops never ends on its own. The microphone callback keeps
+# appending to an unbounded queue at 64 KB/s, so a forgotten F9 costs about
+# 230 MB an hour and ends in a single transcribe over the whole thing.
+#
+# Five minutes is roughly 600 words at the 120 wpm this was measured at, so no
+# real dictation reaches it, and what was said still gets typed rather than
+# thrown away.
+MAX_SECONDS = 300.0
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(HERE, "transcript.log")
 
@@ -769,6 +778,13 @@ def hotkey_loop(model, prompt, rules, terms, quit_evt):
             if keyboard.is_pressed("esc"):
                 break
             if not toggle.wait(0.15):
+                # Nothing pressed. If a recording is running anyway, this is
+                # the only place that can notice it has run too long: the
+                # hotkey is what normally ends one, and it is not coming.
+                if _rec.is_set() and time.time() - started > MAX_SECONDS:
+                    print("  [%d minute limit reached] typing what was said..."
+                          % (MAX_SECONDS / 60))
+                    toggle.set()
                 continue
             toggle.clear()
 

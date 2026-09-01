@@ -461,7 +461,7 @@ misheard became the correction rules for free.
 Run-Tests.cmd
 ```
 
-Twelve suites, all offline. The first run generates the speech corpus with the local Windows SAPI voices.
+Fifteen suites, all offline. The first run generates the speech corpus with the local Windows SAPI voices.
 
 | Suite | Asks |
 |---|---|
@@ -474,10 +474,36 @@ Twelve suites, all offline. The first run generates the speech corpus with the l
 | `test_polish` | Is filler removed, and are real words ever eaten? |
 | `test_settings` | Do settings persist and apply, and does the pill still refuse focus? |
 | `test_silence` | Does near-silence ever type anything? |
+| `test_noise` | Is a voice across the room ignored without locking you out? |
 | `test_tray` | Does the tray work, and does the pill sit right and hide when idle? |
 | `test_endtoend` | Does every name resolve, and does the F9 path actually run? |
+| `test_resume` | After the lid closes for hours, does F9 still work? |
+| `test_palette` | Is every colour still defined in exactly one place? |
+| `test_limits` | Do malformed input and a forgotten hotkey fail safely? |
+
+**Every one of these was written after something broke, and each is checked against the bug it exists for** — reverting the fix has to make the test fail, or the test is decoration. `test_palette` and `test_limits` were verified this way against injected regressions before being trusted.
 
 **Note on running the whole suite back to back:** each suite loads its own model, and on a 4 GB card a run can occasionally start before the previous one has released VRAM. If a suite fails once and passes alone, that is what happened.
+
+---
+
+## 6b. Three faults that never announced themselves
+
+Found by probing the code rather than by using it, on the last pass before calling v1 finished. **None of them crashes at the moment it happens**, which is exactly why none had ever been reported — the tool just gets quietly worse and says nothing. That is the failure shape worth hunting once the loud bugs are gone.
+
+**One long line in `vocabulary.txt` switched off all vocabulary biasing.** `build_prompt()` walked the terms in order and `break`ed at the first one too big for the 180-token budget. If that term was first in the file, nothing was collected, the prompt came back `None`, and every term went unbiased for the whole session. `mine_vocabulary.py` reads an Obsidian vault, so a base64 blob or a minified line arriving as one enormous "word" is a realistic way in. Now an oversized term is skipped rather than fatal, and `load_vocabulary()` rejects anything past `MAX_TERM_CHARS` (60 — the longest real term in the file is 21).
+
+**A `settings.json` holding `null` killed the app at startup.** `json.load` returns `None` for it, and `key in None` raises `TypeError` — before the log file exists, so there was nothing to read afterwards. A bare string was quieter and worse: `key in "some string"` is a substring test, so it silently matched settings that were never set. Anything that is not a JSON object now falls back to defaults.
+
+**A recording nobody stopped never ended.** The microphone callback appends to an unbounded queue at 64 KB/s, so a forgotten F9 cost about 230 MB an hour and finished with a single transcribe over all of it. Streaming mode capped its own buffer, but streaming is a setting a user can turn off. The hotkey loop already wakes every 150 ms, so it now notices a recording past `MAX_SECONDS` (300 — 600 words at the 120 wpm this was measured at) and stops it through the ordinary path, so what was actually said still gets typed.
+
+---
+
+## 6c. One palette, enforced
+
+`dictate_theme.py` opened by claiming its colours were "a single set used by both the pill and the settings window". **That was not true when it was written.** The accent green was spelled out in four files, and in `install.py` it was the tuple `(61, 220, 132)` — a copy that searching for `#3ddc84` could never have found.
+
+The cause was worth fixing rather than working around. The module called `ctypes.windll.dwmapi` **at import time**, so every consumer wrapped the import in `try/except` and needed its own fallback copy of the colours for the case where it failed. Resolving those DLLs lazily removed the guard, and with it the reason the copies existed. `test_palette.py` now enforces the docstring's claim instead of trusting it.
 
 ---
 

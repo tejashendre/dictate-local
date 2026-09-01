@@ -85,6 +85,12 @@ def load(path=None):
             stored = json.load(f)
     except Exception:
         pass
+    # Valid JSON is not necessarily a settings file. "null" parses to None and
+    # the lookup below then raises TypeError, which happens before the log
+    # exists and so takes the app down with nothing to read. A bare string is
+    # worse than useless: "key in stored" would quietly match a substring.
+    if not isinstance(stored, dict):
+        stored = {}
 
     out = {}
     for key, (default, env, _restart, _desc) in SCHEMA.items():

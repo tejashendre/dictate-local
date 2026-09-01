@@ -27,6 +27,10 @@ VOCAB_PATH = os.path.join(HERE, "vocabulary.txt")
 PROMPT_TOKEN_BUDGET = 180
 TERMS_WARN_AT = 100
 
+# A bias term is a name or a short phrase. Anything longer is a line that
+# should not have been in the file at all.
+MAX_TERM_CHARS = 60
+
 
 # --------------------------------------------------------------------------
 # CUDA runtime
@@ -502,6 +506,12 @@ def load_vocabulary(path=VOCAB_PATH):
                 continue
             if "->" in term:            # a correction rule, not a bias term
                 continue
+            if len(term) > MAX_TERM_CHARS:
+                # Not a term. mine_vocabulary reads an Obsidian vault, and a
+                # base64 blob or a minified line there would otherwise arrive
+                # here as one enormous "word" and eat the whole prompt budget.
+                # The longest real term in this file is 28 characters.
+                continue
             key = term.lower()
             if key in seen:
                 continue
@@ -528,15 +538,20 @@ def build_prompt(terms, budget=PROMPT_TOKEN_BUDGET):
     """
     if not terms:
         return None, [], []
-    used = []
+    used, dropped = [], []
     for term in terms:
         candidate = ", ".join(used + [term])
         if _estimate_tokens(candidate) > budget:
-            break
+            # Skip this one and keep going rather than stopping here. This
+            # loop used to break, which meant a single oversized line took
+            # every term below it down with it - and if that line was first,
+            # the prompt came back None and biasing was silently off for the
+            # whole session, with nothing printed to say so.
+            dropped.append(term)
+            continue
         used.append(term)
-    dropped = terms[len(used):]
     if not used:
-        return None, [], terms
+        return None, [], list(terms)
     return ", ".join(used) + ".", used, dropped
 
 
