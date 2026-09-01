@@ -26,7 +26,7 @@ I am building a permanently local, unmetered speech-to-text tool to replace Wisp
 | `install.py` | Start Menu / Desktop shortcuts and the icon |
 | `tests/` | **Eleven suites, all offline** |
 
-**One launcher: `Dictate.cmd`.** Settings are in the app - right-click the pill. `Dictate-Everywhere.cmd` is the same app started elevated, so it reaches administrator windows too. `Run-Tests.cmd` and `Find-My-Key.cmd` are the utilities.
+**One launcher: `Dictate.cmd`.** Settings are in the app - right-click the pill. `Dictate-Everywhere.cmd` is the same app started elevated, so it reaches administrator windows too. `Run-Tests.cmd` runs the suite; `install.py` puts it in the Start Menu; `mine_vocabulary.py` reads an Obsidian vault for terms.
 
 **What it does now:** F9 toggle; `small.en` on CUDA int8_float16 with automatic CPU fallback; custom vocabulary via `initial_prompt` plus near-miss snapping; spoken punctuation (`full stop`, `new line`, `new paragraph`) and commands (`scratch that`, `cap that`, `literally <word>`); optional streaming; appends everything to `transcript.log`.
 

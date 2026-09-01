@@ -11,6 +11,10 @@ The properties that matter are not "does it produce text" but:
     python tests/test_stream.py
 """
 import os
+
+# Never let a test write to the live settings file: a test's audio levels
+# once got saved as the user's voice level and broke dictation.
+os.environ["DICTATE_TESTING"] = "1"
 import subprocess
 import sys
 import wave

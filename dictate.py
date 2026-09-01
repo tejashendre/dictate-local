@@ -129,6 +129,8 @@ _q = queue.Queue()
 _rec = threading.Event()
 _last_typed = ""     # what emit() last sent, so "scratch that" can undo it
 _level = 0.0         # live microphone loudness, drives the pill meter
+_toggle = threading.Event()   # set by the hotkey; watched by the hotkey loop
+_stream = None                # the live audio stream, so resume can replace it
 _target_hwnd = None  # the window that had focus when recording started
 _target_title = ""
 
@@ -203,18 +205,28 @@ def apply_settings(new, changed):
     return messages
 
 
-def _gate_phrase(audio):
+def _gate_phrase(audio, look=None):
     """True when this phrase is the room rather than you.
 
     Shared by both the batch and streaming paths, so they cannot drift apart -
     the last two guards were added to one path only and the other kept the bug.
     """
-    loudness = core.speech_rms(audio, threshold=VAD_THRESHOLD)
+    loudness = (look.rms if look is not None
+                else core.speech_rms(audio, threshold=VAD_THRESHOLD))
     background, floor = _voice.is_background(loudness)
     if background:
         print("  too quiet to be you (%.4f, floor %.4f), ignored as room noise"
               % (loudness, floor))
+        # Say so on screen. Dropping a phrase with the reason only in a log
+        # file is how this locked the user out unnoticed.
+        set_state("listening" if _rec.is_set() else "typed",
+                  "ignored, too quiet")
         return True
+    if _voice.last_reason:
+        print("  noise filter: %s" % _voice.last_reason)
+        set_state("listening" if _rec.is_set() else "typed",
+                  "noise filter off")
+        _voice.last_reason = ""
     _voice.learn(loudness)
     _remember_voice_level()
     return False
@@ -388,8 +400,11 @@ def transcribe_and_type(model, audio, held, prompt=None, rules=(), terms=()):
     # Held long enough is not the same as actually said something. Real usage
     # produced "Thank you for watching." from half a second of near-silence,
     # which would have been typed into whatever window was focused.
-    speaking, speech_s = core.has_speech(audio, threshold=VAD_THRESHOLD)
-    if speaking and USE_GATE and _gate_phrase(audio):
+    # One voice-activity pass, reused by the gate. Running it twice cost
+    # 170 ms per utterance computing the same answer.
+    look = core.analyse(audio, threshold=VAD_THRESHOLD)
+    speaking, speech_s = look.has_speech(), look.speech_seconds
+    if speaking and USE_GATE and _gate_phrase(audio, look):
         set_state("idle")
         return
     if not speaking:
@@ -561,9 +576,15 @@ def main():
     print("")
     print("  Press %s and start talking.\n" % HOTKEY.upper())
 
-    stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
-                            callback=on_audio, blocksize=1024)
-    stream.start()
+    global _stream
+    _stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
+                             dtype="float32", callback=on_audio,
+                             blocksize=1024)
+    _stream.start()
+    stream = _stream
+
+    threading.Thread(target=_watch_for_resume, args=(quit_evt,),
+                     daemon=True).start()
     globals()["_audio_stream"] = stream
 
     quit_evt = threading.Event()
@@ -622,6 +643,78 @@ def main():
     print("\n  bye\n")
 
 
+def _rearm():
+    """Re-register the hotkey and reopen the microphone.
+
+    Windows drops low-level keyboard hooks across Modern Standby, and the
+    audio stream goes stale with them. The process survives, so nothing looks
+    wrong: no crash, nothing in the log, and F9 simply stops doing anything.
+    Reported after a laptop was folded for three hours, and confirmed against
+    the Kernel-Power log - standby 14:13, resume 16:47, silent ever since.
+    """
+    global _stream
+    ok = []
+    try:
+        keyboard.unhook_all()
+    except Exception:
+        pass
+    try:
+        keyboard.add_hotkey(HOTKEY, _toggle.set, suppress=True)
+        ok.append("hotkey")
+    except Exception:
+        try:
+            keyboard.add_hotkey(HOTKEY, _toggle.set)
+            ok.append("hotkey (unsuppressed)")
+        except Exception as e:
+            print("  could not re-arm the hotkey: %s" % type(e).__name__)
+
+    try:
+        if _stream is not None:
+            try:
+                _stream.stop(); _stream.close()
+            except Exception:
+                pass
+        _stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
+                                 dtype="float32", callback=on_audio,
+                                 blocksize=1024)
+        _stream.start()
+        ok.append("microphone")
+    except Exception as e:
+        print("  could not reopen the microphone: %s" % type(e).__name__)
+    print("  re-armed after resume: %s" % (", ".join(ok) or "nothing"))
+    return bool(ok)
+
+
+def _watch_for_resume(quit_evt, tick=5.0, gap=60.0):
+    """Notice that the machine slept, and re-arm.
+
+    Detected by a jump in the wall clock rather than a Windows power event:
+    catching PBT_APMRESUMEAUTOMATIC needs a message loop and a window proc,
+    and a clock that jumps by far more than the sleep interval means the same
+    thing with none of that machinery.
+    """
+    last = time.time()
+    while not quit_evt.is_set():
+        time.sleep(tick)
+        now = time.time()
+        if now - last > gap:
+            print("  woke after %.0f minutes asleep, re-arming"
+                  % ((now - last) / 60.0))
+            # Everything here is best-effort. If any of it raises, the thread
+            # must not die: it is the only thing that will notice the NEXT
+            # sleep, and a dead watchdog fails exactly as silently as the bug
+            # it exists to fix.
+            try:
+                _rec.clear()
+                drain()
+                _rearm()
+                set_state("idle")
+            except Exception as e:
+                print("  re-arm failed (%s), the watchdog is still running"
+                      % type(e).__name__)
+        last = now
+
+
 def hotkey_loop(model, prompt, rules, terms, quit_evt):
     """Watch the hotkey and drive recording.
 
@@ -638,7 +731,7 @@ def hotkey_loop(model, prompt, rules, terms, quit_evt):
     The callback runs on the keyboard library's own thread, so it only sets an
     event; all the real work stays on this thread.
     """
-    toggle = threading.Event()
+    toggle = _toggle
     started = 0.0
     worker = None
     stop_evt = None

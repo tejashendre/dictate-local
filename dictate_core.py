@@ -249,6 +249,51 @@ _HALLUCINATIONS = {
 }
 
 
+class Analysis:
+    """One voice-activity pass, reused by everything that needs it."""
+
+    __slots__ = ("regions", "speech_seconds", "rms")
+
+    def __init__(self, regions, speech_seconds, rms):
+        self.regions = regions
+        self.speech_seconds = speech_seconds
+        self.rms = rms
+
+    def has_speech(self, min_seconds=None):
+        return self.speech_seconds >= (min_seconds
+                                       if min_seconds is not None
+                                       else MIN_SPEECH_SECONDS)
+
+
+def analyse(audio, sample_rate=16000, threshold=None):
+    """Run Silero VAD ONCE and derive everything from that single pass.
+
+    Measured: has_speech() and speech_rms() each ran their own pass over the
+    same audio, 170 ms of duplicated work on a 17 s clip - about 15% of the
+    whole utterance latency, spent computing the same answer twice.
+    """
+    import numpy as _np
+    if audio is None or len(audio) < int(0.1 * sample_rate):
+        return Analysis([], 0.0, 0.0)
+    try:
+        from faster_whisper.vad import get_speech_timestamps, VadOptions
+        regions = get_speech_timestamps(
+            audio, VadOptions(
+                threshold=threshold if threshold is not None else 0.6,
+                min_silence_duration_ms=200, speech_pad_ms=100))
+    except Exception:
+        rms = float(_np.sqrt(_np.mean(_np.square(audio))))
+        return Analysis([], len(audio) / sample_rate, rms)
+
+    seconds = sum(r["end"] - r["start"] for r in regions) / sample_rate
+    if not regions:
+        return Analysis([], 0.0, 0.0)
+    parts = [audio[r["start"]:r["end"]] for r in regions]
+    joined = _np.concatenate(parts) if parts else _np.zeros(1)
+    return Analysis(regions, seconds,
+                    float(_np.sqrt(_np.mean(_np.square(joined)))))
+
+
 def has_speech(audio, min_seconds=MIN_SPEECH_SECONDS, sample_rate=16000,
                threshold=None):
     """Does this audio actually contain speech? Returns (bool, seconds).
@@ -294,8 +339,29 @@ def has_speech(audio, min_seconds=MIN_SPEECH_SECONDS, sample_rate=16000,
 # the microphone, the gain and how close you sit - none of which are knowable
 # in advance, and all of which this learns by watching.
 
-GATE_RATIO = 0.35          # below this fraction of your voice, treat as room
+GATE_RATIO = 0.30          # below this fraction of your voice, treat as room
 GATE_MIN_SAMPLES = 4       # do not gate until your level is actually known
+
+# If the gate rejects this many phrases in a row, the learned level is wrong
+# and it switches itself off.
+#
+# This is not defensive padding, it is a bug that already happened. A test run
+# fed the loud synthetic corpus (RMS 0.1164) through the real transcribe path,
+# which learned and SAVED that as the speaking level. The real microphone
+# measures 0.0087-0.0123 - roughly ten times quieter - so the floor sat above
+# every real phrase and dictation stopped working entirely, with the reason
+# visible only in a log file.
+#
+# A gate that can silently lock the user out is worse than no gate. It must be
+# able to notice it is wrong.
+#
+# The counter resets on every accepted phrase, so this only trips when NOTHING
+# is getting through - the signature of a wrong level. A television talking
+# through several of your pauses does not trip it, because your own phrases in
+# between keep resetting it. That distinction matters: an earlier version gave
+# up after three correct rejections and switched off exactly when it was
+# working.
+GATE_GIVE_UP_AFTER = 5
 
 
 def speech_rms(audio, sample_rate=16000, threshold=None):
@@ -333,6 +399,9 @@ class VoiceLevel:
     def __init__(self, samples=None, ratio=GATE_RATIO):
         self.samples = list(samples or [])
         self.ratio = ratio
+        self.consecutive_rejects = 0
+        self.disabled = False
+        self.last_reason = ""
 
     @property
     def level(self):
@@ -346,18 +415,34 @@ class VoiceLevel:
         if rms and rms > 0:
             self.samples.append(float(rms))
             del self.samples[:-25]          # recent history only
+            self.consecutive_rejects = 0
 
     def is_background(self, rms):
         """True if this is too quiet to be you. Returns (verdict, threshold).
 
-        Refuses to judge until it has heard you enough times - guessing early
-        would reject your first few phrases, which is the worst possible first
-        impression.
+        Refuses to judge until it has heard you enough times, and gives up
+        entirely if it starts rejecting everything - see GATE_GIVE_UP_AFTER.
         """
-        if len(self.samples) < GATE_MIN_SAMPLES or not rms:
+        if self.disabled or len(self.samples) < GATE_MIN_SAMPLES or not rms:
             return False, None
         floor = self.level * self.ratio
-        return rms < floor, floor
+        if rms >= floor:
+            self.consecutive_rejects = 0
+            return False, floor
+
+        self.consecutive_rejects += 1
+        if self.consecutive_rejects >= GATE_GIVE_UP_AFTER:
+            # Everything is being rejected, so the learned level is wrong, not
+            # the speaker. Forget it and let the words through.
+            self.disabled = True
+            self.samples = []
+            self.consecutive_rejects = 0
+            self.last_reason = (
+                "rejected %d phrases in a row, so the learned voice level was "
+                "wrong. Noise filtering is off for this session and will "
+                "relearn." % GATE_GIVE_UP_AFTER)
+            return False, floor
+        return True, floor
 
 
 def collapse_repetition(text):

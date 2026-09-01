@@ -14,6 +14,10 @@ Three things this guards, all of which were visibly wrong before:
 """
 import ctypes
 import os
+
+# Never let a test write to the live settings file: a test's audio levels
+# once got saved as the user's voice level and broke dictation.
+os.environ["DICTATE_TESTING"] = "1"
 import sys
 import threading
 import time

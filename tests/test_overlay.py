@@ -15,6 +15,10 @@ Shows a real window for a few seconds, then closes itself.
 """
 import ctypes
 import os
+
+# Never let a test write to the live settings file: a test's audio levels
+# once got saved as the user's voice level and broke dictation.
+os.environ["DICTATE_TESTING"] = "1"
 import sys
 import threading
 import time
@@ -115,21 +119,19 @@ def test_mic_meter():
         time.sleep(0.7)
         ov.set_state("listening")
         time.sleep(0.6)
-        seen["lit_with_sound"] = sum(
-            1 for b in ov._bars
-            if ov.meter.itemcget(b, "fill") != dictate_overlay.METER_OFF)
+        # The meter is a rendered image now, so assert on the level history
+        # that drives it rather than on canvas item colours.
+        seen["lit_with_sound"] = sum(1 for v in ov._history if v > 0)
 
         level["v"] = 0.0                     # a pause, having already heard
         time.sleep(dictate_overlay.SILENT_WARN_S + 1.0)
-        seen["pause_text"] = ov.label.cget("text")
+        seen["pause_text"] = ov.bg.itemcget(ov._label_id, "text")
         seen["not_alarming"] = "no sound" not in seen["pause_text"]
-        seen["dark_when_silent"] = all(
-            ov.meter.itemcget(b, "fill") == dictate_overlay.METER_OFF
-            for b in ov._bars)
+        seen["dark_when_silent"] = all(v <= 0 for v in ov._history)
 
         level["v"] = 0.08                    # it comes back
         time.sleep(0.6)
-        seen["recovered"] = "no sound" not in ov.label.cget("text")
+        seen["recovered"] = "no sound" not in ov.bg.itemcget(ov._label_id, "text")
         ov.stop()
 
     t = threading.Thread(target=driver, daemon=True)
@@ -139,7 +141,11 @@ def test_mic_meter():
 
     ok = check("bars light while sound is arriving",
                seen.get("lit_with_sound", 0) > 0,
-               "%s bars lit" % seen.get("lit_with_sound"))
+               "%s of %d bars lit" % (seen.get("lit_with_sound"),
+                                      dictate_overlay.METER_BARS))
+    ok &= check("the waveform is rendered, not drawn as raw rectangles",
+                dictate_overlay.HD and ov._wave_img is not None,
+                "HD=%s" % dictate_overlay.HD)
     ok &= check("meter goes dark on silence", seen.get("dark_when_silent"))
     # A thinking pause is not a fault. Warning on it made a working tool look
     # stuck, which is exactly what was reported from real use: one logged
@@ -159,7 +165,7 @@ def test_mic_meter():
         time.sleep(0.6)
         ov2.set_state("listening")
         time.sleep(dictate_overlay.SILENT_WARN_S + 1.2)
-        seen2["text"] = ov2.label.cget("text")
+        seen2["text"] = ov2.bg.itemcget(ov2._label_id, "text")
         ov2.stop()
 
     t2 = threading.Thread(target=driver2, daemon=True)

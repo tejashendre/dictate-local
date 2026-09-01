@@ -20,6 +20,10 @@ The two things this has to get right, and the second matters more:
     python tests/test_noise.py
 """
 import os
+
+# Never let a test write to the live settings file: a test's audio levels
+# once got saved as the user's voice level and broke dictation.
+os.environ["DICTATE_TESTING"] = "1"
 import subprocess
 import sys
 import wave
@@ -100,12 +104,27 @@ def main():
                     "your level %.4f" % (fresh.level or 0))
 
     print("\n  3. background during a pause is rejected")
-    for atten in (0.35, 0.25, 0.15, 0.08):
+    # Your own phrases interleave in real use and reset the give-up counter,
+    # so this models that rather than feeding an unbroken run of noise - an
+    # earlier version of this test made the gate switch itself off precisely
+    # when it was working correctly.
+    mine = core.speech_rms(near)
+    for atten in (0.25, 0.15, 0.08):
         r = core.speech_rms(far * atten)
         bg, floor = fresh.is_background(r)
         ok_all &= check("television at %3.0f%% of you (RMS %.4f) rejected, "
                         "floor %.4f" % (atten * 100, r, floor or 0), bg,
                         "NOT rejected")
+        fresh.learn(mine)          # you speak again between the pauses
+
+    # 35% is deliberately let through. The floor sits at 30% of your level,
+    # and raising it to catch a loud television starts rejecting you whenever
+    # you speak softly. Letting one loud TV phrase through is the cheaper
+    # mistake; losing your own sentence is not.
+    loud_bg = core.speech_rms(far * 0.35)
+    ok_all &= check("a television at 35%% is allowed through, by design",
+                    not fresh.is_background(loud_bg)[0],
+                    "rejected at %.4f" % loud_bg)
 
     print("\n  4. YOU are never rejected")
     ok_all &= check("your normal voice", not fresh.is_background(
@@ -124,7 +143,7 @@ def main():
     app = open(os.path.join(ROOT, "dictate.py"), encoding="utf-8").read()
     strm = open(os.path.join(ROOT, "dictate_stream.py"), encoding="utf-8").read()
     ok_all &= check("batch path calls the shared gate",
-                    "_gate_phrase(audio)" in app)
+                    "_gate_phrase(audio" in app)
     ok_all &= check("streaming path is given the shared gate",
                     "gate=_gate_phrase" in app)
     ok_all &= check("StreamingSession actually uses it", "self.gate" in strm)
@@ -146,7 +165,42 @@ def main():
                     "emitted %s, transcribed %d times" % (out, calls["n"]))
     ok_all &= check("and it is counted", sess.dropped_background == 1)
 
-    print("\n  6. the median ignores one-off shouts and whispers")
+    print("\n  6. a wrong learned level cannot lock the speaker out")
+    # The bug that shipped. A test run saved the loud synthetic corpus
+    # (RMS 0.1164) as the speaking level; the real microphone measures
+    # 0.0087-0.0123, so the floor sat above every real phrase and dictation
+    # stopped working, with the reason only in a log file.
+    REAL = [0.0087, 0.0102, 0.0113, 0.0123]      # measured from the real mic
+    poisoned = core.VoiceLevel([0.1164] * core.GATE_MIN_SAMPLES)
+    rejected = sum(bool(poisoned.is_background(REAL[i % len(REAL)])[0])
+                   for i in range(8))
+    ok_all &= check("it stops gating instead of rejecting forever",
+                    poisoned.disabled, "still gating after 8 real phrases")
+    ok_all &= check("it gives up after %d, and no more"
+                    % core.GATE_GIVE_UP_AFTER,
+                    rejected == core.GATE_GIVE_UP_AFTER - 1,
+                    "rejected %d of 8" % rejected)
+    ok_all &= check("and it says why", "wrong" in poisoned.last_reason)
+    ok_all &= check("everything passes afterwards",
+                    not poisoned.is_background(REAL[0])[0])
+
+    print("\n  7. a quiet microphone works on its own terms")
+    quiet = core.VoiceLevel()
+    for r in REAL:
+        quiet.learn(r)
+    ok_all &= check("learns a level of %.4f from a quiet mic" % (quiet.level or 0),
+                    quiet.level and 0.008 < quiet.level < 0.013)
+    ok_all &= check("your speech at that level is accepted",
+                    not quiet.is_background(0.0102)[0])
+    ok_all &= check("a television at 20% of it is still rejected",
+                    quiet.is_background(0.0102 * 0.20)[0])
+
+    print("\n  8. a test can never write the live settings file")
+    import dictate_config
+    ok_all &= check("DICTATE_TESTING blocks save()",
+                    dictate_config.save(dictate_config.load()) is None)
+
+    print("\n  9. the median ignores one-off shouts and whispers")
     v = core.VoiceLevel()
     for x in (0.08, 0.09, 0.085, 0.095, 0.09):
         v.learn(x)

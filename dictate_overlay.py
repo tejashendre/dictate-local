@@ -82,19 +82,40 @@ try:
 except Exception:
     theme = None
 
+# Tk's canvas has no anti-aliasing: a 6-pixel create_oval draws a visible
+# octagon, and the meter bars come out with hard jagged edges. Both are obvious
+# the moment the pill is looked at closely.
+#
+# PIL does anti-alias, and is already here for the tray icon. So the dot and
+# the waveform are drawn into an image at SUPERSAMPLE times the size and
+# scaled down with LANCZOS, which is what actually makes the curves smooth.
+try:
+    from PIL import Image, ImageDraw, ImageFilter, ImageTk
+    HD = True
+except Exception:
+    HD = False
+
+SUPERSAMPLE = 4
+
 # state -> (dot colour, label)
+#
+# The labels matter as much as the colours. A blue dot with no word next to it
+# was reported as "the bot disappearing into a blue dot, I do not know what it
+# means" - which is a fair complaint about a status indicator.
 STATES = {
     "idle":      ("#5a6472", "F9 to talk"),
     "listening": ("#3ddc84", "listening"),
-    "thinking":  ("#ffb020", "thinking"),
-    "typed":     ("#4cc2ff", "typed"),
+    "thinking":  ("#ffb020", "writing it"),
+    "typed":     ("#4cc2ff", "done"),
     "cpu":       ("#ffb020", "on CPU"),
 }
 
-# Sized from side-by-side screenshots rather than guessed. 236x38 read well
-# but sat too large on screen in use, so everything is scaled to 80% together
-# - width, height, type and meter - because shrinking the box alone just
-# crowds the text.
+# One size, and it stays that way.
+#
+# A version that grew to 320x40 while listening was built and rejected: the
+# bigger pill read as intrusive rather than impressive, and the compact chip
+# was better all along. The refinement that was actually wanted is in the
+# RENDERING - bloom, gradient, anti-aliased curves - not in the dimensions.
 PILL_W = 189
 PILL_H = 30
 
@@ -118,7 +139,9 @@ SILENT_WARN_S = 3.0
 
 # Slate rather than neutral grey: flat grey goes muddy against the tinted
 # surfaces Windows 11 puts behind a translucent window.
-BG = "#12151c"
+BG = "#12151c"        # bottom of the gradient
+BG_TOP = "#1b2029"    # top of the gradient, slightly lifted
+EDGE = "#2c3442"      # the lit hairline along the top edge
 FG = "#e8edf5"
 DIM = "#8b96a8"
 
@@ -176,37 +199,40 @@ class Overlay:
         except tk.TclError:
             pass
 
-        wrap = tk.Frame(root, bg=BG, padx=10, pady=0)
-        wrap.pack(fill="both", expand=True)
+        # One canvas for the whole pill, so a rendered gradient can sit behind
+        # everything. Text stays native: Windows draws small type with
+        # subpixel anti-aliasing that beats anything PIL would produce here,
+        # so only the graphics go through PIL.
+        self._w, self._h = PILL_W, PILL_H
+        self._bars = METER_BARS
+        self.bg = tk.Canvas(root, width=self._w, height=self._h, bg=BG,
+                            highlightthickness=0, bd=0)
+        self.bg.pack(fill="both", expand=True)
+        self._bg_img = None
+        self._bg_id = self.bg.create_image(self._w // 2, self._h // 2)
+        self._draw_background()
 
-        cy = PILL_H // 2
-        self.dot = tk.Canvas(wrap, width=7, height=PILL_H, bg=BG,
-                             highlightthickness=0)
-        self._dot_id = self.dot.create_oval(0, cy - 3, 6, cy + 3,
-                                            fill=STATES["idle"][0], outline="")
-        self.dot.pack(side="left", padx=(0, 8))
+        cy = self._h // 2
+        self._dot_img = None
+        self._dot_id = self.bg.create_image(15, cy)
+        self._draw_dot(STATES["idle"][0])
 
-        self.label = tk.Label(wrap, text="F9 to talk", bg=BG, fg=FG,
-                              font=("Segoe UI Semibold", 9), anchor="w")
-        self.label.pack(side="left", fill="x", expand=True)
+        self._label_id = self.bg.create_text(
+            27, cy, text="F9 to talk", anchor="w", fill=FG,
+            font=("Segoe UI Semibold", 9))
 
-        # Live microphone meter. A muted mic and a working one look identical
-        # without this, which is the single most confusing way for the tool to
-        # fail: the pill says "listening" and nothing ever arrives.
-        self.timer = tk.Label(wrap, text="", bg=BG, fg=DIM,
-                              font=("Cascadia Mono", 8))
-        self.timer.pack(side="right", padx=(7, 0))
-
-        self._meter_h = PILL_H - 12
         self._bar_gap = 4
-        self.meter = tk.Canvas(wrap, width=METER_BARS * self._bar_gap,
-                               height=self._meter_h,
-                               bg=BG, highlightthickness=0)
-        self._bars = [self.meter.create_rectangle(0, 0, 0, 0, fill=METER_OFF,
-                                                  outline="")
-                      for _ in range(METER_BARS)]
-        self.meter.pack(side="right", padx=(8, 0))
-        self._history = collections.deque([0.0] * METER_BARS, maxlen=METER_BARS)
+        self._meter_h = self._h - 12
+        self._meter_w = self._bars * self._bar_gap
+        self._wave_img = None
+        self._wave_id = self.bg.create_image(self._w - 58, cy)
+
+        self._timer_id = self.bg.create_text(
+            self._w - 12, cy, text="", anchor="e", fill=DIM,
+            font=("Cascadia Mono", 8))
+
+        self._history = collections.deque([0.0] * self._bars,
+                                          maxlen=self._bars)
         self._draw_wave()
 
         root.update_idletasks()             # foreground is taken here
@@ -225,7 +251,8 @@ class Overlay:
             except Exception:
                 pass
 
-        for w in (root, wrap, self.label, self.dot, self.timer):
+        # One canvas now, so only two widgets need the bindings.
+        for w in (root, self.bg):
             w.bind("<Button-1>", self._drag_start)
             w.bind("<B1-Motion>", self._drag_move)
             w.bind("<Button-3>", lambda _e: self._open_settings())
@@ -291,7 +318,7 @@ class Overlay:
         pill lands at 0,0 - on top of the title bar of whatever is behind it.
         That is exactly what it was doing.
         """
-        w, h = PILL_W, PILL_H
+        w, h = self._w, self._h
         pos = None
         try:
             with open(POS_PATH) as f:
@@ -354,7 +381,8 @@ class Overlay:
             self._apply(state, detail)
 
         if self._state == "listening":
-            self.timer.config(text="%4.1fs" % (time.time() - self._started))
+            self.bg.itemconfigure(self._timer_id,
+                                  text="%4.1fs" % (time.time() - self._started))
             self._update_meter()
         elif self._clear_at and time.time() > self._clear_at:
             self._apply("idle", "")
@@ -386,8 +414,8 @@ class Overlay:
         if level > SILENT_RMS:
             self._silent_since = None
             self._heard_anything = True
-            if self.label.cget("text") != "listening":
-                self.label.config(text="listening", fg=FG)
+            if self.bg.itemcget(self._label_id, "text") != "listening":
+                self.bg.itemconfigure(self._label_id, text="listening", fill=FG)
         else:
             if self._silent_since is None:
                 self._silent_since = now
@@ -395,10 +423,89 @@ class Overlay:
                 if self._heard_anything:
                     # A pause, not a fault. Say so plainly rather than
                     # implying something is wrong.
-                    self.label.config(text="listening - go on", fg=DIM)
+                    self.bg.itemconfigure(self._label_id,
+                                          text="listening - go on",
+                                          fill=DIM)
                 else:
-                    self.label.config(text="no sound - check mic",
-                                      fg=METER_HOT)
+                    self.bg.itemconfigure(self._label_id,
+                                          text="no sound - check mic",
+                                          fill=METER_HOT)
+
+    @staticmethod
+    def _rgb(hex_colour):
+        h = hex_colour.lstrip("#")
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+    def _draw_dot(self, colour):
+        """A round dot with a soft halo.
+
+        create_oval at this size draws a visible octagon. The halo is what
+        stops it reading as a flat sticker: a live indicator on Windows 11 has
+        some bloom to it, and without that the pill looks printed on.
+        """
+        if not HD:
+            return
+        d = 15                       # room around the dot for the glow
+        big = d * SUPERSAMPLE
+        img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        cx = big / 2.0
+        rgb = self._rgb(colour)
+
+        r = 3.0 * SUPERSAMPLE
+        draw.ellipse((cx - r, cx - r, cx + r, cx + r), fill=rgb + (255,))
+
+        # A real blur under the dot, not concentric rings. Side by side the
+        # ring version came out dull and muddy; a blurred copy composited
+        # underneath reads as an actual light source. The dot only redraws on
+        # a state change, so the blur costs nothing per frame.
+        glow = img.filter(ImageFilter.GaussianBlur(radius=2.2 * SUPERSAMPLE))
+        img = Image.alpha_composite(
+            Image.alpha_composite(Image.new("RGBA", (big, big), (0, 0, 0, 0)),
+                                  glow), img)
+        img = img.resize((d, d), Image.LANCZOS)
+        self._dot_img = ImageTk.PhotoImage(img)   # keep a reference or it goes
+        self.bg.itemconfig(self._dot_id, image=self._dot_img)
+
+    def _draw_background(self):
+        """A gradient body with a lit top edge.
+
+        Flat fill is what made this look cheap however sharp the graphics
+        were. Real Windows 11 surfaces are slightly lighter at the top and
+        carry a one-pixel highlight along the upper edge; that is most of the
+        difference between "a coloured rectangle" and "a surface".
+        """
+        if not HD:
+            return
+        w, h = self._w, self._h
+        big_w, big_h = w * 2, h * SUPERSAMPLE
+        img = Image.new("RGBA", (big_w, big_h))
+        draw = ImageDraw.Draw(img)
+        top = self._rgb(BG_TOP)
+        bottom = self._rgb(BG)
+        for y in range(big_h):
+            f = y / max(big_h - 1, 1)
+            draw.line([(0, y), (big_w, y)],
+                      fill=tuple(int(top[c] + (bottom[c] - top[c]) * f)
+                                 for c in range(3)) + (255,))
+        # the highlight along the very top, as Windows does it
+        draw.rectangle((0, 0, big_w, SUPERSAMPLE - 1),
+                       fill=self._rgb(EDGE) + (255,))
+        img = img.resize((w, h), Image.LANCZOS)
+        self._bg_img = ImageTk.PhotoImage(img)
+        self.bg.itemconfig(self._bg_id, image=self._bg_img)
+
+    def _show_meter(self, on):
+        """The meter belongs to listening and nothing else.
+
+        Left visible in the other states it shows a row of stubs that reads as
+        leftover debris rather than as an idle meter.
+        """
+        try:
+            self.bg.itemconfigure(self._wave_id,
+                                  state="normal" if on else "hidden")
+        except Exception:
+            pass
 
     def _draw_wave(self):
         """Symmetric bars grown from a centre line, oldest on the left.
@@ -406,27 +513,58 @@ class Overlay:
         This is what people expect a voice meter to look like. The previous
         left-to-right fill read as a battery gauge, which is why it never
         looked like it was doing anything.
+
+        Drawn through PIL with rounded caps and supersampling: the canvas
+        version had hard jagged edges, and when quiet it left a row of dots
+        that read as broken rather than idle.
         """
-        mid = self._meter_h / 2.0
-        for i, bar in enumerate(self._bars):
+        if not HD:
+            return
+        w, h = self._meter_w, self._meter_h
+        big_w, big_h = w * SUPERSAMPLE, h * SUPERSAMPLE
+        # Transparent, not filled with BG: an opaque backing shows up as a
+        # dark rectangle sitting on the gradient, which is exactly the kind of
+        # detail that makes a UI look pasted together.
+        img = Image.new("RGBA", (big_w, big_h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        mid = big_h / 2.0
+        bar_w = 2 * SUPERSAMPLE
+        gap = self._bar_gap * SUPERSAMPLE
+        radius = bar_w / 2.0
+
+        for i in range(self._bars):
             v = self._history[i] if i < len(self._history) else 0.0
+            x0 = i * gap
+            x1 = x0 + bar_w
             if v <= 0.0:
-                # A flat centre line still reads as "connected but quiet",
-                # where an empty canvas reads as broken.
-                g = self._bar_gap
-                self.meter.coords(bar, i * g, mid - 0.75, i * g + 2, mid + 0.75)
-                self.meter.itemconfig(bar, fill=METER_OFF)
-                continue
-            half = max(1.0, v * (mid - 1))
-            g = self._bar_gap
-            self.meter.coords(bar, i * g, mid - half, i * g + 2, mid + half)
-            self.meter.itemconfig(bar, fill=METER_HOT if v > 0.92 else METER_ON)
+                # A short stub, not a dot: reads as "quiet" instead of "dead".
+                half = radius
+                colour = self._rgb(METER_OFF)
+            else:
+                half = max(radius, v * (mid - radius))
+                # Colour walks toward cyan as it gets louder, so the meter
+                # carries amplitude in hue as well as height. A single flat
+                # green reads as a static graphic however tall the bars are.
+                colour = (int(60 + 40 * v), int(220 - 20 * v),
+                          int(130 + 110 * v))
+            draw.rounded_rectangle((x0, mid - half, x1, mid + half),
+                                   radius=radius, fill=colour + (255,))
+
+        # Bloom, the same trick as the dot. Measured below 2 ms per frame at
+        # this size, against a 100 ms redraw, so it is affordable.
+        glow = img.filter(ImageFilter.GaussianBlur(radius=2.5 * SUPERSAMPLE))
+        img = Image.alpha_composite(
+            Image.alpha_composite(Image.new("RGBA", (big_w, big_h),
+                                            (0, 0, 0, 0)), glow), img)
+        img = img.resize((w, h), Image.LANCZOS)
+        self._wave_img = ImageTk.PhotoImage(img)
+        self.bg.itemconfig(self._wave_id, image=self._wave_img)
 
     def _clear_meter(self):
         """Flatten the waveform. Clears the history too, so the next
         recording starts from silence rather than replaying the last one."""
         self._history.clear()
-        self._history.extend([0.0] * METER_BARS)
+        self._history.extend([0.0] * self._bars)
         self._draw_wave()
         self._silent_since = None
 
@@ -434,28 +572,29 @@ class Overlay:
         colour, text = STATES.get(state, STATES["idle"])
         if self.auto_hide:
             self._set_visible(state != "idle")
+        self._show_meter(state == "listening")
         if state == "idle":
             text = "%s to talk" % self.hotkey
         self._state = state
-        self.dot.itemconfig(self._dot_id, fill=colour)
+        self._draw_dot(colour)
         shown = detail or text
         if len(shown) > 17:
             shown = shown[:16] + "…"
-        self.label.config(text=shown,
-                          fg=FG if state != "idle" else DIM)
+        self.bg.itemconfigure(self._label_id, text=shown,
+                              fill=FG if state != "idle" else DIM)
 
         if state == "listening":
             self._started = time.time()
             self._clear_at = 0.0
             self._silent_since = None
             self._heard_anything = False
-            self.timer.config(text=" 0.0s")
+            self.bg.itemconfigure(self._timer_id, text=" 0.0s")
         elif state == "typed":
-            self.timer.config(text="")
+            self.bg.itemconfigure(self._timer_id, text="")
             self._clear_meter()
             self._clear_at = time.time() + 2.5
         else:
-            self.timer.config(text="")
+            self.bg.itemconfigure(self._timer_id, text="")
             self._clear_meter()
             self._clear_at = 0.0
 

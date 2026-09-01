@@ -76,11 +76,12 @@ def _coerce(value, default):
     return str(value)
 
 
-def load():
+def load(path=None):
     """Return the full settings dict, env overriding file overriding default."""
+    path = path or PATH
     stored = {}
     try:
-        with open(PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             stored = json.load(f)
     except Exception:
         pass
@@ -96,15 +97,29 @@ def load():
     return out
 
 
-def save(settings):
-    """Write only the keys we know about, so the file stays clean."""
+def save(settings, path=None):
+    """Write only the keys we know about, so the file stays clean.
+
+    Refuses to write the LIVE file while a test is running. Not caution - a bug
+    that happened: tests/test_endtoend.py imports dictate and pushes the loud
+    synthetic corpus through the real transcribe path, which learned that level
+    and saved it. The real microphone is about ten times quieter, so the noise
+    gate then rejected every real phrase and dictation stopped working, with
+    the reason visible only in a log file.
+
+    Tests can still prove persistence by passing an explicit path; only the
+    user's own file is protected.
+    """
+    target = path or PATH
+    if path is None and os.environ.get("DICTATE_TESTING") == "1":
+        return None
     data = {k: settings[k] for k in SCHEMA if k in settings}
-    tmp = PATH + ".tmp"
+    tmp = target + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, sort_keys=True)
         f.write("\n")
-    os.replace(tmp, PATH)      # atomic, so a crash cannot leave half a file
-    return PATH
+    os.replace(tmp, target)    # atomic, so a crash cannot leave half a file
+    return target
 
 
 def needs_restart(key):

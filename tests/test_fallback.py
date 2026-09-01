@@ -19,6 +19,10 @@ hard timeout, so a hang is reported as a failure instead of stalling the suite.
     python tests/test_fallback.py
 """
 import os
+
+# Never let a test write to the live settings file: a test's audio levels
+# once got saved as the user's voice level and broke dictation.
+os.environ["DICTATE_TESTING"] = "1"
 import subprocess
 import sys
 import wave

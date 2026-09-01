@@ -7,6 +7,10 @@ QUIET half is the one that matters.
     python tests/test_polish.py
 """
 import os
+
+# Never let a test write to the live settings file: a test's audio levels
+# once got saved as the user's voice level and broke dictation.
+os.environ["DICTATE_TESTING"] = "1"
 import sys
 import time
 

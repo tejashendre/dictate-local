@@ -97,3 +97,47 @@ get up -> GitHub
 pre-po -> repo
 pre po -> repo
 
+
+
+# --- mined from your notes on TJ Career Center ---
+# Every term here was SPOKEN by the local voice and transcribed
+# without a prompt: only the ones Whisper got wrong are kept.
+# 67 of 90 candidates were dropped because it already knew them.
+#
+# 'Gen', 'Jan', 'AI-assisted' and 'AI-enabled' were removed by
+# hand: three-letter fragments collide with ordinary speech, and
+# the AI- pair differed only in spacing, which is not worth a
+# slot in a prompt that is already full.
+SQL
+Nestlé
+McKinsey
+Hendre
+SaaS
+spontanée
+ATS
+Telefónica
+JobCopilot
+EUR
+GenAI
+IIFL
+BizOps
+BAnCLUBS
+SpendSignal
+Börse
+Shubham
+DoubleTick
+HPAIR
+
+# --- overflow: terms that did not fit the prompt, as free fix-up rules ---
+# The prompt is capped at ~180 tokens and is full at 47 terms. These six were
+# dropped, but a correction rule costs no budget at all, so the ones that are
+# SAFE to match live here instead.
+#
+# Deliberately NOT added, even though Whisper mishears them:
+#   Börse    heard as "verse"    - "verse" is a real word; the rule would eat it
+#   Shubham  heard as "shabbat"  - "Shabbat" is a real word
+#   HPAIR    heard as "haver"    - too close to ordinary speech to risk
+# A correction that eats a real word is worse than a term spelled wrong.
+bnclubs -> BAnCLUBS
+spend signal -> SpendSignal
+double tick -> DoubleTick

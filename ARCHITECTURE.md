@@ -309,6 +309,54 @@ Measured rather than assumed, because the worry was that dictation would fill th
 So storage was never the risk it felt like. Logs are trimmed anyway — about a year of transcript history, 1 MB of diagnostics — because nothing should append forever.
 
 
+### 3.14 What a day of real use actually changed
+
+Everything below came from using the tool, not from testing it. That
+distinction is the point: eleven passing suites did not catch any of it.
+
+**Two copies were running at once.** Both held the global hotkey and both
+typed, so F9 toggled them out of step and one kept recording after the other
+stopped. It looked exactly like broken transcription. A named mutex now
+refuses the second copy. **No amount of model tuning would have fixed this.**
+
+**A test wrote its own audio level into the live settings.** The noise gate
+learned the synthetic corpus at RMS 0.1164; the real microphone measures
+0.0087-0.0123, about ten times quieter. The floor then sat above every real
+phrase and dictation stopped working, with the reason only in a log file.
+Three fixes: `save()` refuses the live file during tests, the gate switches
+itself off if nothing gets through, and rejected phrases now say so on screen.
+
+**A `NameError` shipped past eleven suites**, because no test ever pressed F9.
+`tests/test_endtoend.py` now resolves every global name in every module and
+runs both recording paths for real.
+
+**Voice detection ran twice per phrase**, computing the same answer. One pass
+now, 50% off that step.
+
+**Python is not the bottleneck**, measured on one utterance:
+
+| | |
+|---|---|
+| Model inference (C++/CUDA) | **884 ms — 78.6%** |
+| Voice detection (also a neural net) | 209 ms — 18.6% |
+| **All the Python** | **2.3 ms — 0.2%** |
+
+**Battery barely matters.** Under load the GPU held 1,920 MHz of 2,100 on
+battery against 1,972 on AC, and drew *less* power for the same work.
+
+**A bigger model does not help here.** `medium.en` cost 2.9x the wait and
+592 MB more VRAM and scored one term *worse*; `distil-medium.en` came back at
+92.6% WER, effectively broken in this configuration. The caveat matters:
+`small.en` already scores 0.0% WER on this corpus, so the benchmark cannot
+detect an improvement even if one exists on messier real speech.
+
+**Most vocabulary candidates were already correct.** Mining 250 Obsidian notes
+produced 90 candidates ranked by frequency - and frequency was the wrong
+signal. Speaking each one and transcribing it with no prompt showed Whisper
+already spelled **67 of 90** perfectly. Only 23 needed help, and what it
+misheard became the correction rules for free.
+
+
 ---
 
 ## 4. What the Wispr Flow data actually showed
@@ -395,7 +443,8 @@ So storage was never the risk it felt like. Logs are trimmed anyway — about a 
 | 9 | Microphone meter, silence guard, real-voice use | **Done. Validated on a real voice 31 Aug 2026** |
 | 10 | Tray icon, auto-hiding pill, position fixes | **Done. Behaves like an installed application** |
 | 11 | Single instance, detached launch, crash surfacing | **Done. Two copies at once was the real cause of the "buggy" session** |
-| 12 | End-to-end test, Start Menu install, data pruning | **Done. Eleven suites** |
+| 12 | End-to-end test, Start Menu install, data pruning | **Done** |
+| 13 | Noise gate, vocabulary mining, HD pill | **Done. Twelve suites** |
 
 ### What is worth doing next
 
@@ -412,7 +461,7 @@ So storage was never the risk it felt like. Logs are trimmed anyway — about a 
 Run-Tests.cmd
 ```
 
-Eleven suites, all offline. The first run generates the speech corpus with the local Windows SAPI voices.
+Twelve suites, all offline. The first run generates the speech corpus with the local Windows SAPI voices.
 
 | Suite | Asks |
 |---|---|

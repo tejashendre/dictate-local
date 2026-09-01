@@ -11,6 +11,10 @@ proper nouns but degrades ordinary speech is a bad trade.
     python tests/test_vocab.py
 """
 import os
+
+# Never let a test write to the live settings file: a test's audio levels
+# once got saved as the user's voice level and broke dictation.
+os.environ["DICTATE_TESTING"] = "1"
 import re
 import sys
 import time

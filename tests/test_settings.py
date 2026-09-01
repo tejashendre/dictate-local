@@ -13,6 +13,10 @@ window hangs the process, so settings are a normal Toplevel instead.
 import ctypes
 import json
 import os
+
+# Never let a test write to the live settings file: a test's audio levels
+# once got saved as the user's voice level and broke dictation.
+os.environ["DICTATE_TESTING"] = "1"
 import shutil
 import sys
 import threading
@@ -56,15 +60,18 @@ def test_config_roundtrip():
         ok = check("defaults load", loaded["polish"] in ("off", "fast", "llm"))
         ok &= check("pause is a float", isinstance(loaded["pause_s"], float))
 
+        # Write to a scratch path, never the live file: a test's values once
+        # got saved as the user's real settings and broke dictation.
+        scratch = cfg.PATH + ".test"
         loaded["polish"] = "off"
         loaded["pause_s"] = 0.7
-        cfg.save(loaded)
-        again = cfg.load()
+        cfg.save(loaded, path=scratch)
+        again = cfg.load(scratch)
         ok &= check("saved values come back",
                     again["polish"] == "off" and abs(again["pause_s"] - 0.7) < 1e-9,
                     "%s %s" % (again["polish"], again["pause_s"]))
 
-        with open(cfg.PATH, encoding="utf-8") as f:
+        with open(scratch, encoding="utf-8") as f:
             raw = json.load(f)
         ok &= check("file holds only known keys",
                     set(raw) <= set(cfg.SCHEMA), str(set(raw) - set(cfg.SCHEMA)))
@@ -76,6 +83,12 @@ def test_config_roundtrip():
 
         ok &= check("restart-needed flags are declared",
                     cfg.needs_restart("model") and not cfg.needs_restart("pause_s"))
+        ok &= check("the live file is refused during tests",
+                    cfg.save(loaded) is None)
+        try:
+            os.remove(scratch)
+        except Exception:
+            pass
     finally:
         if backup:
             shutil.move(backup, cfg.PATH)
