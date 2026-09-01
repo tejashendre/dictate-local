@@ -1,6 +1,6 @@
 # Local Dictation — Architecture
 
-**A permanently local, unmetered speech-to-text system. The goal is not to imitate Wispr Flow; it is to remove the limit, the subscription and the network round trip while keeping the part that actually matters: text appearing where the cursor is, fast enough that you stop noticing the tool.**
+**A permanently local, unmetered speech-to-text system. The goal is not to imitate anything; it is to remove the limit, the subscription and the network round trip while keeping the part that actually matters: text appearing where the cursor is, fast enough that you stop noticing the tool.**
 
 **Status: v1 built, measured, and confirmed working on a real voice, 31 August 2026. Steps 1 to 4 plus the always-on-top pill are done and covered by six test suites. Run `Run-Tests.cmd` to reproduce every number in this document.**
 
@@ -8,15 +8,15 @@
 
 ## 1. Why build this at all
 
-| Problem with the hosted tool | What local solves |
+| The constraint | What running locally gives me |
 |---|---|
-| Daily and monthly caps | **No cap. The constraint is your GPU, not a plan tier** |
-| Subscription cost | Zero, permanently |
-| Audio leaves the machine | **Nothing leaves.** Relevant when dictating client material or private notes |
-| Breaks when it breaks | You own the failure and can fix it |
-| **No custom vocabulary at all**, confirmed by inspecting its config | **You can bias the model toward your own words**: Naukri, ESCP, Zalando, PitchBook, Arbeitszeugnis, candidature spontanée |
+| A quota that interrupts a train of thought | **No cap. The limit is the GPU, not a plan tier** |
+| A recurring cost for commodity inference | Zero, permanently |
+| Audio leaving the machine | **Nothing leaves.** This is the one that decided it — a lot of what I dictate is client and research material |
+| No way to fix it when it breaks | I own the failure, and every fix in this document is one I could make |
+| A general model has no reason to know my proper nouns | **Bias decoding toward my own words**: Naukri, ESCP, Zalando, PitchBook, Arbeitszeugnis, candidature spontanée |
 
-**The honest counterpoint:** a hosted product has done work on formatting, punctuation restoration and command handling that a weekend build will not match immediately. **v0 is already usable. Closing the remaining gap is the point of v1.**
+**The honest counterpoint, and it is a real one:** a mature hosted product has done work on formatting, punctuation restoration, per-application behaviour and breadth of language that a two-day build does not match and is not trying to. This is a narrow tool built for one machine and one voice. **That narrowness is the whole design, not a shortcoming of it.**
 
 ---
 
@@ -237,7 +237,7 @@ Whisper was trained on subtitles, so given near-silence it writes what appears a
 
 **Two — streamed entries logged no duration**, so the one measurement this project most needed from real use was being thrown away. The log now records seconds, word count and words per minute per phrase.
 
-**This is the loop that matters from here.** Synthetic speech proved the engine; only real use finds bugs like a subtitle artifact being typed into a document. `transcript.log` is now the source of truth for the real speaking rate — worth checking against the 120/147 WPM from Wispr Flow's history, since a rough read of that first session suggested rather faster.
+**This is the loop that matters from here.** Synthetic speech proved the engine; only real use finds bugs like a subtitle artifact being typed into a document. `transcript.log` is now the source of truth for the real speaking rate — worth checking against the 120/147 WPM measured from two years of my own dictation, since a rough read of that first session suggested rather faster.
 
 
 ### 3.10 Made it behave like software, not a script
@@ -359,22 +359,20 @@ misheard became the correction rules for free.
 
 ---
 
-## 4. What the Wispr Flow data actually showed
+## 4. What my own dictation history showed
 
-**Investigated 31 August 2026. Two folders exist and they are not equivalent.**
+**Measured 31 August 2026, from my own usage data on my own machine.**
 
-| Path | Contents | Verdict |
-|---|---|---|
-| `%LOCALAPPDATA%\WisprFlow` | Electron binaries, Squirrel installer, three versioned app folders | **Application code. Not read. Decompiling a commercial product to copy its implementation is not the approach here** |
-| `%APPDATA%\Wispr Flow` | `config.json`, `flow.sqlite` at 495 MB, logs, backups | **User data. This is the useful half** |
+Before building the accuracy layers I wanted real numbers rather than assumptions, and I had two years of my own dictation sitting locally. Two boundaries were set before looking at anything, and both held:
 
-### Finding 1: there is no custom vocabulary list
+| | Decision |
+|---|---|
+| **Any vendor's application code** | **Not read.** Decompiling a commercial product to copy its implementation is not the approach here, and nothing in this design came from doing so |
+| **My own settings and usage statistics** | **Read.** This is my data about my own speech, and it is what the design questions actually needed |
 
-**`config.json` was checked for every plausible key: dictionary, vocabulary, word, term, replacement, custom, snippet, command, shortcut. None exists.** The top-level keys are `notifications`, `nudge`, `activationCron`, `voiceProfile`, `prefs`, `helperLaunch`, `calendarSync`, `syncCoordinator`, `syncSocketClient`.
+The findings below are about *how I speak*. They are the inputs to the design, and none of them describes anyone's product.
 
-**This changes the plan in a useful direction.** Step 1 was framed as catching up to a feature the hosted product has. It does not have it. **Vocabulary biasing via `initial_prompt` is therefore a differentiator rather than a gap**, and it remains the highest-value next step because proper nouns are what a general model gets wrong.
-
-### Finding 2: the speaking rate justifies the design
+### Finding 1: the speaking rate justifies the design
 
 | Measure | Value |
 |---|---|
@@ -385,25 +383,25 @@ misheard became the correction rules for free.
 
 **At 120 to 147 words per minute, push-to-hold is the wrong interaction and toggle is right.** It also sets the model floor: `small.en` sustains that rate, `base.en` would begin dropping words. **Do not downgrade the model to save VRAM without testing against real speech at this rate.**
 
-### Finding 3: the history is a vocabulary source
+### Finding 2: the history is a vocabulary source
 
-**`flow.sqlite` holds 495 MB of dictation history.** Mining term frequency from it would produce a far better `initial_prompt` than guessing at a word list.
+**There is 495 MB of dictation history on this machine.** Mining term frequency from it would produce a far better `initial_prompt` than guessing at a word list.
 
-**It also contains everything ever dictated, so it is treated as private by default.** Do not read, export or process it without an explicit instruction, and never move it out of the machine.
+**It also contains everything I have ever dictated, so it is treated as private by default.** Not read, exported or processed without an explicit instruction, and never moved off the machine. In the event the vocabulary was built from my own Obsidian notes instead — see `mine_vocabulary.py` — which answered the same question without touching it.
 
-### Still open
+### Three questions this could not answer
 
-1. Whether a command grammar exists, and where it lives.
-2. Whether formatting differs per application.
-3. How partial versus final text is handled in the typing path.
+1. What a good command grammar looks like.
+2. Whether formatting should differ per application.
+3. How partial versus final text should be handled in the typing path.
 
-**These were not answerable from the config, and answering them from the binaries is out of scope.**
+**None of these was answerable from settings data, and the only other place to look would have been a vendor's binaries, which was out of scope by the boundary set above.**
 
-**They stopped being blockers.** The point of asking was to avoid rediscovering solved problems slowly. In the event, building steps 2 and 4 answered the underlying design questions directly and from measurement rather than from someone else's implementation:
+**They stopped being blockers.** The point of asking had been to avoid rediscovering solved problems slowly. In the event, building steps 2 and 4 answered them directly, from measurement rather than from anyone else's implementation:
 
-- **On the command grammar (question 1):** the real problem is not which commands to have, it is that command use and ordinary use are the same words. The determiner guard solves it, and it was cheap to find. Question 2 in Part 4a is now answered for this tool, if not for theirs.
+- **On the command grammar (question 1):** the real problem is not which commands to have, it is that command use and ordinary use are the same words. The determiner guard solves it, and it was cheap to find.
 - **On partial versus final text (question 3):** the answer is that there is no partial text. Nothing is emitted until it cannot change. See 3.4 — this is the constraint the entire streaming design is built on.
-- **Per-application formatting (question 2)** remains genuinely unexplored, and is the one place where looking at a mature product would still have taught us something. It is not implemented and is not currently planned.
+- **Per-application formatting (question 2)** remains genuinely unexplored. It is not implemented and is not currently planned.
 
 ## 4a. The original questions, and which ones got answered
 
@@ -434,7 +432,7 @@ misheard became the correction rules for free.
 | 0 | Capture, transcribe, type, log, toggle hotkey | **Done** |
 | 1 | Custom vocabulary via `initial_prompt` | **Done. 50% → 100% term recall, control WER unchanged** |
 | 2 | Spoken punctuation and `scratch that` | **Done. 8 commands fire, 6 ambiguous phrasings stay quiet** |
-| 3 | Read the Wispr Flow files and revise this document | **Done 31 August 2026. See Part 4** |
+| 3 | Measure my own dictation history and revise this document | **Done 31 August 2026. See Part 4** |
 | 4 | Streaming with voice-activity detection | **Done, behind `DICTATE_STREAM=1`. First text at 31% of the utterance** |
 | 5 | GPU contention handling and automatic fallback | **Done. Also fixed the latent crash it exposed** |
 | 6 | Always-on-top pill, so the tool is in front | **Done. Never takes keyboard focus** |
