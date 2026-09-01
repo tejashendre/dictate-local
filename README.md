@@ -128,6 +128,8 @@ Run `Run-Tests.cmd` to reproduce every number in the table above. The first run 
 
 `ARCHITECTURE.md` has the full design record: what was measured, what was tried and rejected, and what each failure taught.
 
+[`BUILD_LOG.md`](BUILD_LOG.md) has something rarer: what it cost. This was built in 29 hours by dictating at it, and that page publishes the token accounting, the ratio of instruction to output, and the six failures that shaped the design — including the three that never crashed anything and so were never reported.
+
 ---
 
 ## Who built this
