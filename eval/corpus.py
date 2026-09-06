@@ -102,6 +102,68 @@ def _numbers_in(text):
     return [n.rstrip(".,") for n in re.findall(r"\d[\d,.]*", text or "")]
 
 
+# Tejas speaks at a measured 120 wpm average and 147 peak. A take whose length
+# is wildly out of proportion to its phrase is not a slow reading, it is the
+# wrong audio: a microphone test, a sentence abandoned halfway, or the recorder
+# left running. Two such takes in the first nine recordings pushed a category
+# average from roughly 8 percent WER to 103 percent, which would have been
+# read as a model failure.
+# Calibrated from Tejas's own first nine recordings rather than assumed. The
+# seven good takes came to 123 words in 43.0 seconds, which is 171 wpm reading
+# aloud: faster than the 120 wpm conversational average this project measured
+# earlier, because reading a prompt is not the same as thinking out loud.
+#
+# With that pace the good takes cluster between 0.8x and 1.2x, and the take
+# that was a minute of unrelated talking sits at 3.2x. A first guess of 130 wpm
+# put that same take at exactly 2.5x and it slipped through the threshold.
+WPM = 170.0
+MIN_RATIO = 0.35
+MAX_RATIO = 2.0
+
+
+def expected_seconds(said):
+    """Roughly how long this phrase should take to read aloud."""
+    n = len((said or "").split())
+    return (n / WPM) * 60.0 if n else 0.0
+
+
+def audio_seconds(rec):
+    """Duration of a record's wav, or None when it cannot be read."""
+    import wave
+    path = audio_path(rec)
+    try:
+        with wave.open(path, "rb") as w:
+            return w.getnframes() / float(w.getframerate())
+    except Exception:
+        return None
+
+
+def duration_problem(rec, seconds=None):
+    """A sentence describing why this take looks wrong, or None.
+
+    Silence records are exempt from the lower bound: an empty phrase has no
+    expected duration, and a silent take is supposed to contain nothing.
+    """
+    seconds = audio_seconds(rec) if seconds is None else seconds
+    if seconds is None:
+        return None
+    if rec.get("category") == "silence":
+        if seconds > 20.0:
+            return "silence take is %.0fs, longer than any control needs" % seconds
+        return None
+    want = expected_seconds(rec.get("said", ""))
+    if want <= 0:
+        return None
+    ratio = seconds / want
+    if ratio > MAX_RATIO:
+        return ("%.0fs of audio for a phrase that reads in about %.0fs "
+                "(%.1fx). Likely the wrong take." % (seconds, want, ratio))
+    if ratio < MIN_RATIO:
+        return ("%.1fs of audio for a phrase that reads in about %.0fs "
+                "(%.1fx). Likely cut short." % (seconds, want, ratio))
+    return None
+
+
 def validate(rec, strict_audio=True):
     """Return a list of problems. Empty list means the record is usable.
 
@@ -217,3 +279,29 @@ def audio_path(rec):
     """Absolute path to a record's audio."""
     path = rec["audio"]
     return path if os.path.isabs(path) else os.path.join(PRIVATE, path)
+
+
+def drop(rec_id, path=None):
+    """Remove a record so a re-recorded take replaces it rather than
+    appending a second line with the same id, which would score the bad take
+    and the good one as two separate results."""
+    path = path or CORPUS_PATH
+    if not os.path.exists(path):
+        return 0
+    kept, removed = [], 0
+    with io.open(path, encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                if json.loads(stripped).get("id") == rec_id:
+                    removed += 1
+                    continue
+            except Exception:
+                pass
+            kept.append(stripped)
+    with io.open(path, "w", encoding="utf-8", newline="\n") as f:
+        for line in kept:
+            f.write(line + "\n")
+    return removed

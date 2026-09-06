@@ -268,6 +268,72 @@ def test_phrase_coverage():
     return ok
 
 
+def test_duration_guard():
+    print("\n12. a take that is the wrong audio is caught before scoring")
+    # Found in real use, not in design. Two of the first nine recordings were
+    # a microphone test and a minute of unrelated talking. Both were perfectly
+    # valid records, and they moved the ordinary category from roughly 8
+    # percent word error to 103, which reads as a catastrophic model failure
+    # rather than as bad data.
+    ok = True
+    said = "I need to finish the report before the meeting tomorrow morning."
+    rec = C.new_record("ordinary_000", "audio/x.wav", said, said,
+                       "ordinary", "mic")
+
+    good = C.expected_seconds(said)
+    ok &= check("a phrase has a plausible expected duration",
+                2.0 < good < 8.0, "%.1fs for %d words" % (good, len(said.split())))
+    ok &= check("a take at the expected length passes",
+                C.duration_problem(rec, good) is None)
+    ok &= check("a take at 1.2x still passes",
+                C.duration_problem(rec, good * 1.2) is None,
+                "reading pace varies, the guard must not be twitchy")
+    ok &= check("a 12x take is flagged",
+                C.duration_problem(rec, good * 12) is not None,
+                "this is the 49-second microphone test")
+    ok &= check("a 3x take is flagged",
+                C.duration_problem(rec, good * 3) is not None,
+                "this is the minute of unrelated talking")
+    ok &= check("a take cut to a fifth is flagged",
+                C.duration_problem(rec, good * 0.2) is not None)
+
+    silent = C.new_record("silence_000", "audio/x.wav", "", "", "silence", "mic")
+    ok &= check("a short silence take is not flagged",
+                C.duration_problem(silent, 3.0) is None,
+                "an empty phrase has no expected duration")
+    ok &= check("but a very long silence take is",
+                C.duration_problem(silent, 60.0) is not None)
+    return ok
+
+
+def test_drop_replaces_a_take():
+    print("\n13. re-recording replaces a take instead of duplicating it")
+    ok = True
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "corpus.jsonl")
+    for text in ("first take", "second take"):
+        C.append(C.new_record("ordinary_000", "audio/a.wav", text, text,
+                              "ordinary", "mic"), path=path, strict_audio=False)
+    records, _ = C.load(path, strict_audio=False)
+    ok &= check("two appends of one id give two records", len(records) == 2,
+                "which would score the bad take and the good one separately")
+
+    removed = C.drop("ordinary_000", path=path)
+    ok &= check("drop removes both", removed == 2)
+    records, _ = C.load(path, strict_audio=False)
+    ok &= check("the corpus is empty afterwards", len(records) == 0)
+
+    C.append(C.new_record("ordinary_000", "audio/a.wav", "good take",
+                          "good take", "ordinary", "mic"),
+             path=path, strict_audio=False)
+    records, _ = C.load(path, strict_audio=False)
+    ok &= check("and the replacement stands alone",
+                len(records) == 1 and records[0]["said"] == "good take")
+    ok &= check("dropping an absent id is harmless",
+                C.drop("does_not_exist", path=path) == 0)
+    return ok
+
+
 def test_private_data_is_ignored():
     print("\n  10. no real audio or transcript can be committed")
     ok = True
@@ -321,6 +387,7 @@ def main():
                test_silence_is_caught(), test_layers_do_not_hide_a_weak_model(),
                test_said_versus_want(), test_corpus_validation(),
                test_corpus_round_trip(), test_phrase_coverage(),
+               test_duration_guard(), test_drop_replaces_a_take(),
                test_private_data_is_ignored(), test_report_renders()]
     print("\n  %s" % ("PASS" if all(results) else "FAIL"))
     return 0 if all(results) else 1

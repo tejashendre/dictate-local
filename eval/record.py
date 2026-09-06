@@ -146,6 +146,7 @@ def main():
     ap.add_argument("--verify", action="store_true", help="validate the corpus")
     ap.add_argument("--device", help="input device name or index")
     ap.add_argument("--redo", action="store_true", help="re-record items already done")
+    ap.add_argument("--only", help="re-record just this id, replacing it")
     args = ap.parse_args()
 
     if args.verify:
@@ -157,12 +158,29 @@ def main():
                 print("    %s" % p)
         else:
             print("  no problems found")
+
+        # A record can be perfectly well formed and still be the wrong audio.
+        # Two takes in the first nine were a microphone test and a minute of
+        # ordinary talking, and they moved a category average from about 8
+        # percent word error to 103, which reads as a model failure.
+        suspect = []
+        for rec in records:
+            why = C.duration_problem(rec)
+            if why:
+                suspect.append((rec["id"], why))
+        if suspect:
+            print("\n  %d take(s) look like the wrong audio:" % len(suspect))
+            for rid, why in suspect:
+                print("    %-18s %s" % (rid, why))
+            print("\n  Replace one with:  python eval/record.py --only %s"
+                  % suspect[0][0])
+
         cov = C.coverage(records)
         thin = [c for c, n in cov.items() if n == 0]
         if thin:
             print("\n  categories with nothing recorded yet:")
             print("    %s" % ", ".join(thin))
-        return 0 if not problems else 1
+        return 0 if not (problems or suspect) else 1
 
     done = already_done()
     if args.list:
@@ -179,7 +197,10 @@ def main():
         if args.category and cat != args.category:
             continue
         pid = phrase_id(i, cat)
-        if pid in done and not args.redo:
+        if args.only:
+            if pid != args.only:
+                continue
+        elif pid in done and not args.redo:
             continue
         todo.append((i, cat, said, want, names, numbers))
 
@@ -254,6 +275,8 @@ def main():
                 protected_numbers=numbers,
                 notes="",
             )
+            if pid in done:
+                C.drop(pid)
             try:
                 C.append(rec)
                 saved += 1

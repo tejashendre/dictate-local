@@ -342,6 +342,19 @@ def main():
         return 0
 
     records, problems = C.load()
+    # A take that is the wrong audio scores as a catastrophic model failure.
+    # Two of the first nine recordings were a microphone test and a minute of
+    # unrelated talking, and they moved a category average from roughly 8
+    # percent word error to 103. Excluding them loudly is honest; including
+    # them silently is not.
+    suspect = [r for r in records if C.duration_problem(r)]
+    if suspect:
+        print("\n  EXCLUDED %d take(s) whose audio does not match the phrase:"
+              % len(suspect))
+        for r in suspect:
+            print("    %-18s %s" % (r["id"], C.duration_problem(r)))
+        print("    Re-record with:  python eval/record.py --only <id>")
+        records = [r for r in records if not C.duration_problem(r)]
     if not records:
         print("\n  No recordings found in %s" % C.CORPUS_PATH)
         print("  Record them first:  python eval/record.py\n")
