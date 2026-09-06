@@ -34,3 +34,12 @@ models/
 *.onnx
 *.gguf
 *.ct2
+
+# Phase 4 local state. corrections.json holds the words Tejas taught the tool
+# and recovery.jsonl holds raw and final dictation text. Section 19 lists both
+# as local-only, and calls this file an acceptance requirement rather than
+# documentation advice.
+corrections.json
+corrections.json.*
+recovery.jsonl
+recovery.jsonl.*

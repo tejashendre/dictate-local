@@ -175,7 +175,10 @@ def test_nothing_private_is_tracked():
                 "settings.json",
                 "settings.json.bak2",
                 "transcript.log",
-                "dictate.log"):
+                "dictate.log",
+                "corrections.json",
+                "corrections.json.quarantined",
+                "recovery.jsonl"):
         r = subprocess.run(["git", "check-ignore", "-q", rel],
                            cwd=ROOT, capture_output=True)
         ok &= check("ignored: %s" % rel, r.returncode == 0)
