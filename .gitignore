@@ -12,3 +12,23 @@ settings.json
 .pytest_cache/
 tests/__pycache__/
 
+# Private real-voice evaluation data. Recorded by Tejas on his own machine
+# with his own microphone. Audio of a real person and the transcripts of what
+# he said are personal data: they never enter version control, and no accuracy
+# claim in this repository may quote a number that cannot be reproduced from
+# the public synthetic corpus in tests/audio.
+eval/private/
+eval/private/**
+*.wav.meta
+corpus.jsonl
+corpus_*.jsonl
+eval_results/
+eval/results/
+*.eval.json
+
+# Model weights. Downloaded on demand, never tracked.
+models/
+*.bin
+*.onnx
+*.gguf
+*.ct2
