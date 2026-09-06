@@ -74,6 +74,82 @@ def main():
         ok_all &= check("%-52s" % text[:52], same,
                         "" if same else "changed to %r" % got)
 
+    print("\n  5. spoken addresses become written ones")
+    # Measured on real recordings: urls_emails scored 91.7% word error against
+    # a raw 52.8, so the formatting was doing more damage than the mishearing.
+    # Typing "tejas dot hendre at edu dot escp dot eu" is not a transcription
+    # failure, it is a transformation that was never implemented.
+    for said, want in [
+        ("Send it to tejas dot hendre at edu dot escp dot eu.",
+         "tejas.hendre@edu.escp.eu"),
+        ("My site is tejashendre dot com.", "tejashendre.com"),
+        ("The repository is github dot com slash tejashendre slash dictate "
+         "dash local.", "github.com/tejashendre/dictate-local"),
+        # Whisper usually writes the dot itself, so a run must also be able to
+        # start from a domain that has already been punctuated.
+        ("The repository is github.com slash tejashendre slash dictate dash "
+         "local.", "github.com/tejashendre/dictate-local"),
+        ("Send it to tejas.hendre at edu.escp.eu.", "tejas.hendre@edu.escp.eu"),
+    ]:
+        got, _n = polish.polish_fast(said)
+        ok_all &= check("%-52s" % want[:52], want in got, got[:56])
+
+    print("\n  6. but 'at' stays a word everywhere else")
+    # This is what makes the feature safe to ship. "at" is one of the most
+    # common words in English and a naive conversion would corrupt ordinary
+    # dictation in every sentence containing it. Conversion happens only inside
+    # a run carrying a dot AND a real top-level domain.
+    for text in [
+        "The meeting is at four.",
+        "We will meet at the office at nine.",
+        "I am at home and the report is at the printer.",
+        "Let us move the call to Tuesday the 15th at 9:30 in the morning.",
+        "I worked at Zalando and studied at ESCP.",
+        "I pushed it to github.com yesterday.",
+        "The site github.com is down.",
+    ]:
+        got, _n = polish.polish_fast(text)
+        same = got.rstrip(".") == text.rstrip(".")
+        ok_all &= check("%-52s" % text[:52], same,
+                        "" if same else "changed to %r" % got)
+
+    print("\n  7. underscore joins an identifier")
+    # Unlike "at", "underscore" is never an English word in dictated prose, so
+    # this one needs no address test to be safe.
+    got, _n = polish.polish_fast(
+        "The pill uses WS underscore EX underscore NOACTIVATE so it never "
+        "takes focus.")
+    ok_all &= check("WS_EX_NOACTIVATE", "WS_EX_NOACTIVATE" in got, got[:56])
+
+    print("\n  8. a self-correction types only what was meant")
+    # Measured at 81.2% word error against a raw 11.4: the model heard the
+    # correction perfectly and the product typed both halves of it.
+    got, _n = polish.polish_fast("Send it to Naukri, no wait, send it to "
+                                 "Instahyre.")
+    ok_all &= check("a repeated opening drops the whole first attempt",
+                    got == "Send it to Instahyre.", got)
+    got, _n = polish.polish_fast("I worked at Zalando in Berlin, sorry, in "
+                                 "Berlin from January.")
+    ok_all &= check("a repeated ending keeps the words before it",
+                    got == "I worked at Zalando in Berlin from January.", got)
+
+    print("\n  9. and it never guesses at a correction it cannot prove")
+    # The governing rule of this module. A retry that repeats nothing gives no
+    # evidence of where the first attempt began, so deleting back to the
+    # previous comma would be a guess: "It came to 24 hours, actually 48 hours"
+    # would silently lose "It came to".
+    for text in [
+        "It came to 24 hours, actually 48 hours before the change.",
+        "The meeting is at four, sorry, I meant half past four.",
+        "Sorry, I will be late.",
+        "I am sorry, that was my mistake.",
+        "He said no and that was the end of it.",
+    ]:
+        got, _n = polish.polish_fast(text)
+        same = got.rstrip(".") == text.rstrip(".")
+        ok_all &= check("%-52s" % text[:52], same,
+                        "" if same else "changed to %r" % got)
+
     print("\n  3. it is actually free")
     long_text = " ".join(CLEAN[0][0] for _ in range(30))
     t0 = time.time()
