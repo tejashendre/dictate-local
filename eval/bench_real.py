@@ -347,14 +347,15 @@ def main():
     # unrelated talking, and they moved a category average from roughly 8
     # percent word error to 103. Excluding them loudly is honest; including
     # them silently is not.
-    suspect = [r for r in records if C.duration_problem(r)]
-    if suspect:
+    flagged = C.suspect_takes(records)
+    if flagged:
+        bad_ids = {rid for rid, _why in flagged}
         print("\n  EXCLUDED %d take(s) whose audio does not match the phrase:"
-              % len(suspect))
-        for r in suspect:
-            print("    %-18s %s" % (r["id"], C.duration_problem(r)))
+              % len(flagged))
+        for rid, why in flagged:
+            print("    %-18s %s" % (rid, why))
         print("    Re-record with:  python eval/record.py --only <id>")
-        records = [r for r in records if not C.duration_problem(r)]
+        records = [r for r in records if r["id"] not in bad_ids]
     if not records:
         print("\n  No recordings found in %s" % C.CORPUS_PATH)
         print("  Record them first:  python eval/record.py\n")

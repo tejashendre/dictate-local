@@ -102,23 +102,29 @@ def _numbers_in(text):
     return [n.rstrip(".,") for n in re.findall(r"\d[\d,.]*", text or "")]
 
 
-# Tejas speaks at a measured 120 wpm average and 147 peak. A take whose length
-# is wildly out of proportion to its phrase is not a slow reading, it is the
-# wrong audio: a microphone test, a sentence abandoned halfway, or the recorder
-# left running. Two such takes in the first nine recordings pushed a category
-# average from roughly 8 percent WER to 103 percent, which would have been
-# read as a model failure.
-# Calibrated from Tejas's own first nine recordings rather than assumed. The
-# seven good takes came to 123 words in 43.0 seconds, which is 171 wpm reading
-# aloud: faster than the 120 wpm conversational average this project measured
-# earlier, because reading a prompt is not the same as thinking out loud.
+# A take whose length is wildly out of proportion to its phrase is not a slow
+# reading, it is the wrong audio: a microphone test, an abandoned attempt, or
+# the recorder left running. Two such takes in the first nine recordings pushed
+# a category average from roughly 8 percent word error to 103, which would have
+# been read as a model failure.
 #
-# With that pace the good takes cluster between 0.8x and 1.2x, and the take
-# that was a minute of unrelated talking sits at 3.2x. A first guess of 130 wpm
-# put that same take at exactly 2.5x and it slipped through the threshold.
+# The first version of this check used one reading pace for everything, and the
+# full corpus showed that to be wrong. Median ratios by category, measured from
+# Tejas's own 57 recordings:
+#
+#     ordinary 1.0x   fast 1.0x   false_starts 1.2x   names 1.4x
+#     technical 1.6x  long 1.7x   urls_emails 1.8x
+#
+# Reading "github dot com slash tejashendre" aloud really is slower than
+# reading a sentence, so a single threshold flagged two perfectly good takes.
+# Each take is therefore compared against the median of its own category, which
+# calibrates itself and needs no constant to be guessed right.
 WPM = 170.0
-MIN_RATIO = 0.35
-MAX_RATIO = 2.0
+OUTLIER_FACTOR = 2.2      # times the category median
+MIN_SAMPLES = 3           # below this, fall back to the fixed pace
+FALLBACK_MAX = 2.5
+FALLBACK_MIN = 0.35
+SILENCE_SLOW_S = 60.0     # not wrong, just slow to score
 
 
 def expected_seconds(said):
@@ -138,30 +144,94 @@ def audio_seconds(rec):
         return None
 
 
-def duration_problem(rec, seconds=None):
-    """A sentence describing why this take looks wrong, or None.
+def _ratio(rec, seconds=None):
+    seconds = audio_seconds(rec) if seconds is None else seconds
+    want = expected_seconds(rec.get("said", ""))
+    if seconds is None or want <= 0:
+        return None
+    return seconds / want
 
-    Silence records are exempt from the lower bound: an empty phrase has no
-    expected duration, and a silent take is supposed to contain nothing.
+
+def category_medians(records):
+    """Median duration ratio per category, from the corpus itself."""
+    buckets = {}
+    for rec in records:
+        if rec.get("category") == "silence":
+            continue
+        r = _ratio(rec)
+        if r is not None:
+            buckets.setdefault(rec["category"], []).append(r)
+    out = {}
+    for cat, values in buckets.items():
+        if len(values) >= MIN_SAMPLES:
+            ordered = sorted(values)
+            out[cat] = ordered[len(ordered) // 2]
+    return out
+
+
+def duration_problem(rec, seconds=None, medians=None):
+    """Why this take looks like the wrong audio, or None.
+
+    Pass `medians` from category_medians() to use the self-calibrating check.
+    Without it the fixed pace is used, which is right for a single record but
+    produces false positives on categories that are slow to read aloud.
     """
     seconds = audio_seconds(rec) if seconds is None else seconds
     if seconds is None:
         return None
+
     if rec.get("category") == "silence":
-        if seconds > 20.0:
-            return "silence take is %.0fs, longer than any control needs" % seconds
+        # Length is not wrongness here. A longer silence is a harder test,
+        # because it gives the model more room tone to invent words from.
+        if seconds > SILENCE_SLOW_S:
+            return None
         return None
-    want = expected_seconds(rec.get("said", ""))
-    if want <= 0:
+
+    ratio = _ratio(rec, seconds)
+    if ratio is None:
         return None
-    ratio = seconds / want
-    if ratio > MAX_RATIO:
+
+    cat = rec.get("category")
+    median = (medians or {}).get(cat)
+    if median:
+        if ratio > median * OUTLIER_FACTOR:
+            return ("%.0fs of audio, %.1fx the %.1fx that %s takes normally. "
+                    "Likely the wrong take." % (seconds, ratio, median, cat))
+        if ratio < median / (OUTLIER_FACTOR * 1.5):
+            return ("%.1fs of audio, well under the %.1fx normal for %s. "
+                    "Likely cut short." % (seconds, median, cat))
+        return None
+
+    if ratio > FALLBACK_MAX:
         return ("%.0fs of audio for a phrase that reads in about %.0fs "
-                "(%.1fx). Likely the wrong take." % (seconds, want, ratio))
-    if ratio < MIN_RATIO:
+                "(%.1fx). Likely the wrong take."
+                % (seconds, expected_seconds(rec.get("said", "")), ratio))
+    if ratio < FALLBACK_MIN:
         return ("%.1fs of audio for a phrase that reads in about %.0fs "
-                "(%.1fx). Likely cut short." % (seconds, want, ratio))
+                "(%.1fx). Likely cut short."
+                % (seconds, expected_seconds(rec.get("said", "")), ratio))
     return None
+
+
+def slow_takes(records):
+    """Recordings that are valid but will make a benchmark run long."""
+    out = []
+    for rec in records:
+        secs = audio_seconds(rec)
+        if secs is not None and secs > SILENCE_SLOW_S:
+            out.append((rec["id"], secs))
+    return out
+
+
+def suspect_takes(records):
+    """Every take that looks like the wrong audio, judged against the corpus."""
+    medians = category_medians(records)
+    out = []
+    for rec in records:
+        why = duration_problem(rec, medians=medians)
+        if why:
+            out.append((rec["id"], why))
+    return out
 
 
 def validate(rec, strict_audio=True):

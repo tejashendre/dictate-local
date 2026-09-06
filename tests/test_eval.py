@@ -301,8 +301,62 @@ def test_duration_guard():
     ok &= check("a short silence take is not flagged",
                 C.duration_problem(silent, 3.0) is None,
                 "an empty phrase has no expected duration")
-    ok &= check("but a very long silence take is",
-                C.duration_problem(silent, 60.0) is not None)
+    ok &= check("a long silence take is NOT called wrong either",
+                C.duration_problem(silent, 600.0) is None,
+                "more room tone is a harder test, not a worse take")
+    return ok
+
+
+def test_guard_calibrates_per_category():
+    print("\n  12b. the guard calibrates against each category, not one pace")
+    # Measured from the full 57-recording corpus: the median take in
+    # `ordinary` runs at 1.0x of the nominal reading pace, but `urls_emails`
+    # runs at 1.8x, because saying "github dot com slash tejashendre" aloud is
+    # genuinely slower than reading a sentence. A single global threshold
+    # flagged two good url and technical takes as bad audio.
+    ok = True
+    short = "Send it to Naukri today please now"                 # 6 words
+    slow_cat, fast_cat = "urls_emails", "ordinary"
+
+    records = []
+    # A category whose normal pace is 2x, with one genuine outlier at 6x.
+    for i in range(4):
+        rec = C.new_record("urls_emails_%03d" % i, "audio/u%d.wav" % i,
+                           short, short, slow_cat, "mic")
+        records.append(rec)
+    for i in range(4):
+        rec = C.new_record("ordinary_%03d" % i, "audio/o%d.wav" % i,
+                           short, short, fast_cat, "mic")
+        records.append(rec)
+
+    base = C.expected_seconds(short)
+    seconds = {}
+    for i in range(4):
+        seconds["urls_emails_%03d" % i] = base * (6.0 if i == 3 else 2.0)
+        seconds["ordinary_%03d" % i] = base * (1.0)
+
+    # category_medians reads audio off disk, so drive the check directly with
+    # a medians dict built from the same numbers.
+    medians = {slow_cat: 2.0, fast_cat: 1.0}
+
+    slow_normal = C.duration_problem(records[0], seconds["urls_emails_000"],
+                                     medians=medians)
+    ok &= check("a 2x take in a 2x category passes", slow_normal is None,
+                "this is the url case a fixed threshold got wrong")
+    slow_outlier = C.duration_problem(records[3], seconds["urls_emails_003"],
+                                      medians=medians)
+    ok &= check("a 6x take in the same category is flagged",
+                slow_outlier is not None)
+
+    fast_outlier = C.duration_problem(records[4], base * 3.0, medians=medians)
+    ok &= check("a 3x take in a 1x category is flagged",
+                fast_outlier is not None,
+                "the same 3x that is fine for urls is wrong for ordinary")
+    fast_normal = C.duration_problem(records[4], base * 1.1, medians=medians)
+    ok &= check("and a 1.1x take there passes", fast_normal is None)
+
+    ok &= check("without medians it falls back to the fixed pace",
+                C.duration_problem(records[0], base * 10.0) is not None)
     return ok
 
 
@@ -387,7 +441,8 @@ def main():
                test_silence_is_caught(), test_layers_do_not_hide_a_weak_model(),
                test_said_versus_want(), test_corpus_validation(),
                test_corpus_round_trip(), test_phrase_coverage(),
-               test_duration_guard(), test_drop_replaces_a_take(),
+               test_duration_guard(), test_guard_calibrates_per_category(),
+               test_drop_replaces_a_take(),
                test_private_data_is_ignored(), test_report_renders()]
     print("\n  %s" % ("PASS" if all(results) else "FAIL"))
     return 0 if all(results) else 1

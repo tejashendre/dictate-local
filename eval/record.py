@@ -163,11 +163,14 @@ def main():
         # Two takes in the first nine were a microphone test and a minute of
         # ordinary talking, and they moved a category average from about 8
         # percent word error to 103, which reads as a model failure.
-        suspect = []
-        for rec in records:
-            why = C.duration_problem(rec)
-            if why:
-                suspect.append((rec["id"], why))
+        suspect = C.suspect_takes(records)
+        slow = C.slow_takes(records)
+        if slow:
+            print("\n  %d take(s) are valid but long, so scoring is slower:"
+                  % len(slow))
+            for rid, secs in slow:
+                print("    %-18s %.0fs" % (rid, secs))
+            print("    Long silence is a harder test, not a worse one.")
         if suspect:
             print("\n  %d take(s) look like the wrong audio:" % len(suspect))
             for rid, why in suspect:
