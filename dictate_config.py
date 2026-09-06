@@ -28,8 +28,13 @@ SCHEMA = {
                      "Whisper model. small.en suits this GPU"),
     "device":       ("auto",     "DICTATE_DEVICE",   True,
                      "auto, cuda or cpu"),
-    "stream":       (True,       "DICTATE_STREAM",   True,
-                     "Type as you pause, instead of only when you stop"),
+    # ARCHITECTURE.md Section 5.1: F9 release ends the utterance, not a
+    # thinking pause. Pause chunking split one intended sentence into several
+    # independent recognition and cleanup jobs, which is what made the final
+    # text worse than the raw transcript. Legacy streaming stays reachable from
+    # Advanced settings until v2 passes acceptance.
+    "stream":       (False,      "DICTATE_STREAM",   True,
+                     "Legacy: type as you pause, instead of only when you stop"),
     "pause_s":      (0.7,        "DICTATE_PAUSE",    False,
                      "Silence that ends a phrase, in seconds"),
     "voice_level":  (0.0,        None,               False,
