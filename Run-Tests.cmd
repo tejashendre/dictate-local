@@ -1,34 +1,47 @@
 @echo off
 title Dictation Tests
 cd /d "%~dp0"
+setlocal enabledelayedexpansion
+
+REM Every suite in tests\ runs here. The previous version listed seven of
+REM sixteen, and two of those seven were unreachable: "tests\test_endtoend.py"
+REM and "tests\test_polish.py" had been saved with the \t read as a literal tab,
+REM so the file names were "tests<TAB>est_endtoend.py". Five suites ran while
+REM the window said the suite had passed.
+REM
+REM So the list is no longer hand written. Anything matching tests\test_*.py is
+REM discovered and run, which means a new suite cannot be forgotten here.
+
 echo.
-echo   Running the dictation test suite.
+echo   Running every dictation test suite.
 echo   First run builds the speech corpus with the local Windows voices.
 echo.
+
 if not exist "tests\audio\control_00.wav" (
     echo   --- building test corpus ---
-    python tests\make_audio.py
+    python "tests\make_audio.py"
     echo.
 )
-echo   --- END TO END: does the F9 path actually run ---
-python tests	est_endtoend.py
-echo.
-echo   --- vocabulary: do your terms come out right ---
-python tests\test_vocab.py
-echo.
-echo   --- near-miss snapping: and does it ever rewrite ordinary English ---
-python tests\test_fuzzy.py
-echo.
-echo   --- polish: is filler removed, and are real words ever eaten ---
-python tests	est_polish.py
-echo.
-echo   --- commands: do they fire, and do they stay quiet ---
-python tests\test_commands.py
-echo.
-echo   --- gpu fallback: does it degrade instead of crashing ---
-python tests\test_fallback.py
-echo.
-echo   --- streaming: does text appear before you stop talking ---
-python tests\test_stream.py
+
+set PASS=0
+set FAIL=0
+set FAILED=
+
+for %%F in ("tests\test_*.py") do (
+    echo   --- %%~nF ---
+    python "tests\%%~nxF"
+    if errorlevel 1 (
+        set /a FAIL+=1
+        set FAILED=!FAILED! %%~nF
+    ) else (
+        set /a PASS+=1
+    )
+    echo.
+)
+
+echo   ================================================
+echo     !PASS! passed, !FAIL! failed
+if not "!FAILED!"=="" echo     failing: !FAILED!
+echo   ================================================
 echo.
 pause

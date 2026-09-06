@@ -9,6 +9,8 @@ venv/
 *.log
 settings.json
 *.bak
+*.bak*
+settings.json.*
 .pytest_cache/
 tests/__pycache__/
 
