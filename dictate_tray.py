@@ -62,26 +62,56 @@ class Tray:
     """Tray icon wrapper. Safe to construct even when pystray is missing."""
 
     def __init__(self, on_settings=None, on_quit=None, on_vocab=None,
-                 on_toggle_startup=None, startup_enabled=lambda: False):
+                 on_toggle_startup=None, startup_enabled=lambda: False,
+                 on_dictate=None, on_correct=None, is_recording=lambda: False):
         self.on_settings = on_settings
         self.on_quit = on_quit
         self.on_vocab = on_vocab
         self.on_toggle_startup = on_toggle_startup
         self.startup_enabled = startup_enabled
+        # Section 16: the tray is the application. Dictation and correction are
+        # the two things a user needs and could not otherwise discover, because
+        # a global hotkey is invisible and "Correct last dictation" is the whole
+        # of the learning loop.
+        self.on_dictate = on_dictate
+        self.on_correct = on_correct
+        self.is_recording = is_recording
         self.icon = None
         self._thread = None
         self._state = "idle"
 
     def _menu(self):
-        return pystray.Menu(
+        # Section 16, in that order. Left-click opens Settings, which is
+        # what default=True does, so the icon itself is discoverable.
+        items = []
+        if self.on_dictate:
+            items.append(pystray.MenuItem(
+                lambda _i: ("Stop dictation" if self.is_recording()
+                            else "Start dictation"),
+                self._dictate))
+        if self.on_correct:
+            items.append(pystray.MenuItem("Correct last dictation",
+                                          self._correct))
+        if items:
+            items.append(pystray.Menu.SEPARATOR)
+        items.extend([
+            pystray.MenuItem("Personal words and corrections", self._vocab),
             pystray.MenuItem("Settings", self._settings, default=True),
-            pystray.MenuItem("Edit my words", self._vocab),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Start with Windows", self._startup,
                              checked=lambda _i: bool(self.startup_enabled())),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._quit),
-        )
+        ])
+        return pystray.Menu(*items)
+
+    def _dictate(self, _icon=None, _item=None):
+        if self.on_dictate:
+            self.on_dictate()
+
+    def _correct(self, _icon=None, _item=None):
+        if self.on_correct:
+            self.on_correct()
 
     # Menu callbacks run on the tray thread, so they only ever hand work back
     # to the UI thread rather than touching widgets themselves.

@@ -144,9 +144,36 @@ def test_pill_position_and_hiding():
     return ok
 
 
+def test_menu_matches_section_16():
+    print("\n  the tray menu matches Section 16")
+    # Section 16 names five actions. Dictation and correction are the two a
+    # user could not otherwise discover: a global hotkey is invisible, and
+    # "Correct last dictation" is the whole of the learning loop, so a feature
+    # with no way in is a feature nobody uses.
+    import inspect
+    src = inspect.getsource(dictate_tray.Tray)
+    ok = True
+    for label in ("Correct last dictation", "Personal words and corrections",
+                  "Settings", "Quit"):
+        ok &= check("menu offers %r" % label, label in src)
+    ok &= check("menu offers start and stop dictation",
+                "Start dictation" in src and "Stop dictation" in src)
+    ok &= check("left-click opens Settings", "default=True" in src,
+                "so the icon itself is discoverable")
+
+    args = inspect.signature(dictate_tray.Tray.__init__).parameters
+    for name in ("on_dictate", "on_correct", "is_recording"):
+        ok &= check("Tray accepts %s" % name, name in args)
+    ok &= check("and they are optional, so existing callers still work",
+                all(args[n].default is not inspect.Parameter.empty
+                    for n in ("on_dictate", "on_correct")))
+    return ok
+
+
 def main():
     results = [test_icons(), test_tray_lifecycle(),
-               test_pill_position_and_hiding()]
+               test_pill_position_and_hiding(),
+               test_menu_matches_section_16()]
     print("\n  %s" % ("PASS" if all(results) else "FAIL"))
     return 0 if all(results) else 1
 

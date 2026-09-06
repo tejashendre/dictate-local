@@ -204,15 +204,11 @@ class SettingsWindow:
                             variable=self.vars["polish"]).pack(anchor="w",
                                                                pady=2)
 
-        card = self._card(parent, "Speed")
-        self._switch(card, "stream", "Type as I pause, not only when I stop")
-        self._slider(
-            card, "pause_s", "Pause that ends a phrase", 0.3, 1.5, "%.1fs",
-            lambda v: ("Snappy, but it will cut you off mid-thought."
-                       if v <= 0.5 else
-                       "Balanced. Matches an ordinary thinking pause."
-                       if v <= 0.9 else
-                       "Patient. You lose most of the live typing."))
+        # Section 16: pause timing is gone from the normal panel. Pause
+        # chunking is no longer the default product, and a prominent control
+        # for a legacy experiment teaches the user to tune the wrong thing.
+        # "stream" and "pause_s" now live under Advanced.
+        card = self._card(parent, "Background noise")
         self._switch(card, "noise_gate",
                      "Ignore voices quieter than mine (a TV, the next room)")
         self._slider(
@@ -268,6 +264,26 @@ class SettingsWindow:
                   text=("small.en is the right point on this GPU. base.en "
                         "starts dropping words at your 150 wpm.")
                   ).pack(anchor="w", pady=(6, 0))
+
+        # Section 16: model, device, VAD and the legacy streaming experiment
+        # live under Advanced. Streaming finalized on a thinking pause, which
+        # split one sentence into separately formatted fragments; it is kept
+        # reachable rather than deleted until v2 passes acceptance.
+        card = self._card(parent, "Advanced: legacy streaming")
+        ttk.Label(card, wraplength=400, justify="left", foreground=MUTED,
+                  font=("Segoe UI", 8),
+                  text=("Off is the default. On, text is typed as you pause "
+                        "instead of once when you stop, which is what made "
+                        "one sentence arrive as several.")
+                  ).pack(anchor="w", pady=(0, 8))
+        self._switch(card, "stream", "Type as I pause, not only when I stop")
+        self._slider(
+            card, "pause_s", "Pause that ends a phrase", 0.3, 1.5, "%.1fs",
+            lambda v: ("Snappy, but it will cut you off mid-thought."
+                       if v <= 0.5 else
+                       "Balanced. Matches an ordinary thinking pause."
+                       if v <= 0.9 else
+                       "Patient. You lose most of the live typing."))
 
     def _build_buttons(self, parent):
         row = ttk.Frame(parent)
