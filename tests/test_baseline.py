@@ -84,6 +84,17 @@ def test_benchmark_cannot_touch_live_settings():
     live = os.path.join(ROOT, "settings.json")
     before = digest(live)
 
+    # Keep the actual bytes, not just their hash. This test deliberately calls
+    # save() against the real path, because testing it against a copy would
+    # prove nothing about the file that matters. But that means the moment the
+    # guard is absent, this test performs exactly the write the guard exists to
+    # prevent, and it has already done so once: an injection run that disabled
+    # the guard left hotkey "f13" in the live settings and the hotkey stopped
+    # working. So the file is restored below whatever happens.
+    original = None
+    if os.path.exists(live):
+        original = io.open(live, "rb").read()
+
     import dictate_config as dc
 
     # The guard itself. save() must refuse the live path while testing.
@@ -114,6 +125,17 @@ def test_benchmark_cannot_touch_live_settings():
 
     ok &= check("the live file is byte for byte unchanged",
                 digest(live) == before)
+
+    # Unconditional repair. If the guard held, this rewrites identical bytes.
+    # If it did not, this is what stops a test run from costing the user their
+    # hotkey.
+    if original is not None:
+        damaged = io.open(live, "rb").read() != original
+        with io.open(live, "wb") as f:
+            f.write(original)
+        if damaged:
+            print("      NOTE: the live settings file was written to and has "
+                  "been restored")
     return ok
 
 
