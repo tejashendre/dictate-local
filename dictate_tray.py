@@ -63,18 +63,17 @@ class Tray:
 
     def __init__(self, on_settings=None, on_quit=None, on_vocab=None,
                  on_toggle_startup=None, startup_enabled=lambda: False,
-                 on_dictate=None, on_correct=None, is_recording=lambda: False):
+                 on_dictate=None, is_recording=lambda: False):
         self.on_settings = on_settings
         self.on_quit = on_quit
         self.on_vocab = on_vocab
         self.on_toggle_startup = on_toggle_startup
         self.startup_enabled = startup_enabled
-        # Section 16: the tray is the application. Dictation and correction are
-        # the two things a user needs and could not otherwise discover, because
-        # a global hotkey is invisible and "Correct last dictation" is the whole
-        # of the learning loop.
+        # The tray is the application. Start and stop matters because a global
+        # hotkey is invisible: a user who forgets F9 has no way back in.
+        # Corrections are taught by editing vocabulary.txt, which the menu
+        # already opens, so there is no separate learning UI to reach.
         self.on_dictate = on_dictate
-        self.on_correct = on_correct
         self.is_recording = is_recording
         self.icon = None
         self._thread = None
@@ -89,9 +88,6 @@ class Tray:
                 lambda _i: ("Stop dictation" if self.is_recording()
                             else "Start dictation"),
                 self._dictate))
-        if self.on_correct:
-            items.append(pystray.MenuItem("Correct last dictation",
-                                          self._correct))
         if items:
             items.append(pystray.Menu.SEPARATOR)
         items.extend([
@@ -109,9 +105,6 @@ class Tray:
         if self.on_dictate:
             self.on_dictate()
 
-    def _correct(self, _icon=None, _item=None):
-        if self.on_correct:
-            self.on_correct()
 
     # Menu callbacks run on the tray thread, so they only ever hand work back
     # to the UI thread rather than touching widgets themselves.

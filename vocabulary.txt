@@ -141,3 +141,25 @@ HPAIR
 bnclubs -> BAnCLUBS
 spend signal -> SpendSignal
 double tick -> DoubleTick
+
+
+claude code
+
+# Measured on the real-voice corpus, September 2026. Each left side is
+# what small.en actually produced from Tejas's own speech, not a guess.
+# A rule that never fires is dead weight, so nothing speculative is here.
+Mokri -> Naukri
+mokri -> Naukri
+Nokri -> Naukri
+nokri -> Naukri
+Celero -> Silero
+celero -> Silero
+DME -> DEAMIE
+D M E -> DEAMIE
+spend the signal -> SpendSignal
+Spend the Signal -> SpendSignal
+visswerflow -> Wispr Flow
+wisper flow -> Wispr Flow
+whisper flow -> Wispr Flow
+C-Translate two -> ctranslate2
+c translate two -> ctranslate2

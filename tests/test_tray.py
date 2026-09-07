@@ -153,8 +153,7 @@ def test_menu_matches_section_16():
     import inspect
     src = inspect.getsource(dictate_tray.Tray)
     ok = True
-    for label in ("Correct last dictation", "Personal words and corrections",
-                  "Settings", "Quit"):
+    for label in ("Personal words and corrections", "Settings", "Quit"):
         ok &= check("menu offers %r" % label, label in src)
     ok &= check("menu offers start and stop dictation",
                 "Start dictation" in src and "Stop dictation" in src)
@@ -162,11 +161,10 @@ def test_menu_matches_section_16():
                 "so the icon itself is discoverable")
 
     args = inspect.signature(dictate_tray.Tray.__init__).parameters
-    for name in ("on_dictate", "on_correct", "is_recording"):
+    for name in ("on_dictate", "is_recording"):
         ok &= check("Tray accepts %s" % name, name in args)
-    ok &= check("and they are optional, so existing callers still work",
-                all(args[n].default is not inspect.Parameter.empty
-                    for n in ("on_dictate", "on_correct")))
+    ok &= check("and it is optional, so existing callers still work",
+                args["on_dictate"].default is not inspect.Parameter.empty)
     return ok
 
 
