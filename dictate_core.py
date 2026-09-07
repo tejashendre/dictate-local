@@ -562,40 +562,35 @@ def _estimate_tokens(text):
 
 
 # A spoken range is two numbers with a word between them, and small.en does not
-# reliably read it that way. Both remaining number failures were the same shape:
+# reliably read it that way. A hint of the form "8 to 14, 12 to 16, 48 to 24."
+# was appended to initial_prompt to teach that shape, and on the corpus it took
+# protected numbers from 87.0% to 100.0%.
 #
-#     "8 to 14 metrics"  ->  "8 to 40 metrics"
-#     "12 to 16 lakhs"   ->  "1228 in 260"
+# It was withdrawn on 7 September 2026 after real use showed what the corpus
+# could not. The hint is three instances of "number to number", and in live
+# dictation it began attaching digits to speech containing none:
 #
-# That is a decoding prior rather than an acoustic limit, and initial_prompt is
-# what sets the prior. Measured on 51 real recordings:
+#     "want to mic"                 ->  "1 to mic"
+#     ordinary sentences            ->  "4000 graphs", "4200 grams"
 #
-#     prompt                    raw WER   valid WER   numbers   names
-#     terms only                  17.3%       12.1%     87.0%  100.0%
-#     terms + this hint           17.1%       11.8%    100.0%   96.7%
+# Measured on his transcript log across the same day: 0 of 138 utterances
+# contained a digit before the hint reached the running app, and 3 of 50 after.
+# Small numbers, but every one of the three is a hallucination and one of them
+# is the exact "<digit> to" shape the hint teaches.
 #
-# Four hints were measured, and the column that decided it is the last one:
-# how many recordings gained a digit that was never spoken. A dictation tool
-# that adds numbers to your sentences is worse than one that drops them,
-# because a wrong number reads as correct.
+# The corpus said keep it. The corpus was wrong, and it was wrong in a way
+# worth writing down: numbers_money and dates_times make it far denser in
+# numbers than his real speech, which carries a digit in about 3% of
+# utterances. A corpus that over-represents the thing a change biases toward
+# cannot measure the harm that change does to everything else.
 #
-#     hint                tokens  raw WER  valid WER  numbers  names  invented
-#     no hint                178    17.3%      12.1%    87.0% 100.0%     5/51
-#     ranges bare            189    17.4%      12.2%   100.0%  96.7%     4/51
-#     ranges + units         195    17.1%      11.8%   100.0%  96.7%     5/51
-#     ranges as prose        196    17.4%      12.1%   100.0%  96.7%     4/51
-#
-# Three of those inventions are there with no hint at all, so the floor is 3.
-# Every hint fixes the ranges. The units form reads best on WER but is the only
-# one that invents: it turns "the 30th of November 2026" into "November 3rd,
-# 2026", seeding an ordinal from its own "48 to 24 hours". The 0.3-point WER
-# edge is not worth a fabricated date, so the bare form ships. It is also six
-# tokens cheaper.
-#
-# What this does NOT fix: "12 to 16 lakhs" still decodes as "12 to 18, to 16".
-# It scores 100% only because protected_numbers asks whether each spoken number
-# appears somewhere, and both do. See invented_numbers() in eval/score.py.
-NUMBER_HINT = " 8 to 14, 12 to 16, 48 to 24."
+# Cost of removing it, on the same 51 recordings: protected numbers 100.0% to
+# 87.0%, which fails the Section 21.3 gate. Protected names 96.7% to 100.0%,
+# raw WER 17.4% to 17.3%. The 100.0% was partly a scoring artifact anyway:
+# "12 to 16 lakhs" decoded as "12 to 18, to 16" and scored a perfect 2 of 2
+# because both spoken numbers appear somewhere. A gate that reads green on a
+# wrong sentence is not worth putting digits into his prose to keep.
+NUMBER_HINT = ""
 
 
 def build_prompt(terms, budget=PROMPT_TOKEN_BUDGET, hint=NUMBER_HINT):

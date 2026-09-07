@@ -32,11 +32,31 @@ WS_EX_NOACTIVATE = 0x08000000
 WS_EX_TOOLWINDOW = 0x00000080
 
 
+def printable(text):
+    """A window title that cannot crash the run that reports it.
+
+    This test prints whichever window happened to be in front, and that title
+    belongs to some other application: a browser tab, a chat window, anything.
+    Windows consoles here are cp1252, so one emoji or one non-Latin character
+    in somebody else's title raised UnicodeEncodeError and took the whole suite
+    down with a traceback that said nothing about the pill.
+
+    A test that fails because of what is on the rest of the screen is worse
+    than no test, so the title is reduced to characters the console can
+    actually render before it is ever printed.
+    """
+    enc = getattr(sys.stdout, "encoding", None) or "ascii"
+    try:
+        return text.encode(enc, "replace").decode(enc, "replace")
+    except Exception:
+        return text.encode("ascii", "replace").decode("ascii")
+
+
 def foreground():
     h = u32.GetForegroundWindow()
     buf = ctypes.create_unicode_buffer(256)
     u32.GetWindowTextW(h, buf, 256)
-    return h, buf.value[:40]
+    return h, printable(buf.value[:40])
 
 
 def check(name, ok, detail=""):

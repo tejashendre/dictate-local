@@ -97,7 +97,7 @@ The transcription was the easy half. Everything below was found by using the too
 
 **Quiet failures outlive loud ones.** The last audit found three faults that never crashed anything: one oversized line in the vocabulary file silently switched off *all* biasing; a malformed settings file killed startup before the log existed; and a recording nobody stopped grew unbounded at 64 KB/s. None had ever been reported, because nothing visibly broke.
 
-Every one of those became a test. There are 15 suites, and each exists because something failed first, which is why each is checked by reverting the fix and confirming the test fails.
+Every one of those became a test. There are 20 suites, and each exists because something failed first, which is why each is checked by reverting the fix and confirming the test fails.
 
 ---
 
