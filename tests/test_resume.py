@@ -37,6 +37,86 @@ def check(name, ok, detail=""):
     return bool(ok)
 
 
+def test_modern_standby_is_detected():
+    """The failure that survived three fixes, because it was never detected.
+
+    F9 died four times after the laptop was left alone. Every fix so far
+    improved what _rearm() does. None of them noticed that on this machine the
+    watchdog never called it: the wall-clock detector needs a 60 second jump
+    between two 5 second ticks, and Modern Standby does not produce one. The
+    OS stays at low power and keeps scheduling threads, so time.sleep(5) keeps
+    returning after five seconds while Windows still removes the keyboard hook.
+
+    The evidence was in the log by absence. Kernel-Power recorded standby at
+    20:36:15 and resume at 21:02:58, and across that whole run dictate.log
+    contained not one "woke after" line.
+
+    So the detector now also watches the gap between GetTickCount64, which
+    counts standby, and QueryUnbiasedInterruptTime, which does not.
+    """
+    import dictate
+    print("\n  3. Modern Standby, where the wall clock never jumps")
+    ok = True
+
+    real = dictate._standby_seconds
+    value = {"s": 100.0}
+    dictate._standby_seconds = lambda: value["s"]
+    calls = {"rearm": 0}
+    real_rearm = dictate._rearm
+    dictate._rearm = lambda: calls.__setitem__("rearm", calls["rearm"] + 1)
+
+    quit_evt = threading.Event()
+    t = threading.Thread(
+        target=dictate._watch_for_resume, args=(quit_evt,),
+        kwargs={"tick": 0.1, "gap": 3600.0, "standby_gap": 5.0},
+        daemon=True)
+    t.start()
+    try:
+        time.sleep(0.4)
+        ok &= check("ordinary running is not mistaken for standby",
+                    calls["rearm"] == 0,
+                    "re-armed %d times" % calls["rearm"])
+
+        # A short standby must not trigger a full model rebuild.
+        value["s"] = 102.0
+        time.sleep(0.4)
+        ok &= check("a 2 second standby is below the threshold",
+                    calls["rearm"] == 0)
+
+        # This is the real case: the wall clock has not moved at all, gap is
+        # an hour so the old detector cannot possibly fire, and only standby
+        # time has advanced.
+        value["s"] = 102.0 + 1600.0
+        time.sleep(0.4)
+        ok &= check("26 minutes of standby IS detected",
+                    calls["rearm"] >= 1,
+                    "the wall clock never moved; this is the bug")
+
+        before = calls["rearm"]
+        time.sleep(0.4)
+        ok &= check("and it re-arms once, not on every tick after",
+                    calls["rearm"] == before,
+                    "re-armed %d more times" % (calls["rearm"] - before))
+    finally:
+        quit_evt.set()
+        t.join(timeout=2)
+        dictate._standby_seconds = real
+        dictate._rearm = real_rearm
+
+    print("\n  4. the standby clock itself")
+    a = dictate._standby_seconds()
+    ok &= check("Windows reports standby time", a is not None,
+                "%.0f seconds since boot" % a if a is not None else "None")
+    if a is not None:
+        time.sleep(0.35)
+        b = dictate._standby_seconds()
+        # If this drifted while awake it would re-arm at random, rebuilding
+        # the CUDA model in the middle of dictation.
+        ok &= check("and it does not drift while awake",
+                    abs(b - a) < 0.25, "moved %.3fs" % (b - a))
+    return ok
+
+
 def main():
     import dictate
     ok_all = True
@@ -236,6 +316,8 @@ def main():
     ok_all &= check("and unhook_all alone never clears it",
                     "listening" not in unhook.split("def ")[1],
                     "which is the whole bug")
+
+    ok_all &= test_modern_standby_is_detected()
 
     print("\n  %s" % ("PASS" if ok_all else "FAIL"))
     return 0 if ok_all else 1

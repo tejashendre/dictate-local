@@ -733,21 +733,69 @@ def _rearm():
     return bool(ok)
 
 
-def _watch_for_resume(quit_evt, tick=5.0, gap=60.0):
+def _standby_seconds():
+    """Total time this machine has spent in low-power standby since boot.
+
+    GetTickCount64 counts milliseconds since boot INCLUDING standby.
+    QueryUnbiasedInterruptTime counts 100ns intervals EXCLUDING it. The
+    difference is standby, and it is the only one of the two that moves when
+    Windows suspends without stopping the clock.
+
+    Returns None if either call is unavailable, so the caller falls back to
+    the wall clock rather than losing the watchdog entirely.
+    """
+    try:
+        import ctypes                    # local, like every other use in here
+        k32 = ctypes.windll.kernel32
+        k32.GetTickCount64.restype = ctypes.c_ulonglong
+        unbiased = ctypes.c_ulonglong()
+        if not k32.QueryUnbiasedInterruptTime(ctypes.byref(unbiased)):
+            return None
+        return (k32.GetTickCount64() / 1000.0) - (unbiased.value / 10000000.0)
+    except Exception:
+        return None
+
+
+def _watch_for_resume(quit_evt, tick=5.0, gap=60.0, standby_gap=15.0):
     """Notice that the machine slept, and re-arm.
 
-    Detected by a jump in the wall clock rather than a Windows power event:
-    catching PBT_APMRESUMEAUTOMATIC needs a message loop and a window proc,
-    and a clock that jumps by far more than the sleep interval means the same
-    thing with none of that machinery.
+    Two detectors, because they catch different kinds of sleep and the missing
+    one is what let this bug survive three fixes.
+
+    The wall clock catches S3 sleep and hibernation, where the machine really
+    stops and time.time() jumps. That was the original detector and it is
+    correct for those.
+
+    It is silent on Modern Standby, which is what this laptop actually does.
+    There the OS stays at low power and keeps scheduling threads, so
+    time.sleep(5) keeps returning after about five seconds and no jump ever
+    appears - while Windows still removes the low-level keyboard hook. Four
+    silent F9 failures, and not one "woke after" line in the log to show for
+    them.
+
+    _standby_seconds() measures exactly the time the wall clock cannot see. On
+    this machine it read 40 hours of accumulated standby since boot and moved
+    by 0.000s across a second of ordinary running, so a rise in it means
+    standby and nothing else.
     """
     last = time.time()
+    last_standby = _standby_seconds()
     while not quit_evt.is_set():
         time.sleep(tick)
         now = time.time()
-        if now - last > gap:
-            print("  woke after %.0f minutes asleep, re-arming"
-                  % ((now - last) / 60.0))
+        standby = _standby_seconds()
+
+        slept = now - last > gap
+        why = "%.0f minutes asleep" % ((now - last) / 60.0) if slept else ""
+        if standby is not None and last_standby is not None:
+            in_standby = standby - last_standby
+            if in_standby > standby_gap:
+                slept = True
+                why = "%.0f minutes in standby" % (in_standby / 60.0)
+        last_standby = standby
+
+        if slept:
+            print("  woke after %s, re-arming" % why)
             # Everything here is best-effort. If any of it raises, the thread
             # must not die: it is the only thing that will notice the NEXT
             # sleep, and a dead watchdog fails exactly as silently as the bug
