@@ -257,6 +257,18 @@ def trim_log(path, max_bytes=2_000_000, keep_bytes=500_000):
 # and gets a number wrong, and it sits well inside the 2.5 s latency budget.
 BEAM_SIZE = 3
 
+# vad_filter stays True, and that was not obvious. The application already runs
+# its own Silero pass before deciding to transcribe at all, so the model's
+# filter is the second gate on the same audio and could only be trimming signal
+# a soft word onset needs. Measured both ways on the same 51 recordings:
+#
+#     vad_filter   raw WER   valid WER   numbers    ms
+#     True           17.3%       12.1%     87.0%   482
+#     False          18.3%       12.7%     87.0%   465
+#
+# Off is worse by a point and barely faster, so the double gate earns its
+# place. Recorded here so the question is not reopened on intuition.
+
 MIN_SPEECH_SECONDS = 0.35
 
 _HALLUCINATIONS = {
