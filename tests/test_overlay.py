@@ -67,9 +67,20 @@ def driver(ov, before):
     took = [(s, fgw[1]) for s, fgw in seen_states if fgw[0] == ours]
     drifted = [(s, fgw[1]) for s, fgw in seen_states
                if fgw[0] != before[0] and fgw[0] != ours]
+    # Observed failing once in nine runs, while the live app was being
+    # dictated into. The suspicion is that the window holding focus when the
+    # test started went away mid-run, and Windows then handed the foreground
+    # to the topmost window, which is the pill. That is the environment
+    # moving focus rather than the pill grabbing it, but a bare "took focus"
+    # cannot tell the two apart, so record the evidence needed to decide.
+    still_there = bool(u32.IsWindow(before[0])) if before[0] else False
+    why = ""
+    if took and not still_there:
+        why = ("; the window that had focus at the start (%r) no longer "
+               "exists, so the foreground had nowhere else to go" % before[1])
     results.append(check("the pill never became the foreground window",
-                         not took, "took focus during: %s" % took if took
-                         else "foreground stayed elsewhere"))
+                         not took, ("took focus during: %s%s" % (took, why))
+                         if took else "foreground stayed elsewhere"))
     if drifted:
         print("       note: foreground moved to another app during the test")
         print("       (%s) - unrelated to the pill, not a failure"

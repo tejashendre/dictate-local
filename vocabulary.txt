@@ -167,3 +167,11 @@ int8, load section -> int8 float16
 int 8, load section -> int8 float16
 float sixteen -> float16
 int eight -> int8
+
+# Measured 7 September 2026. "Career OS" spoken slowly and deliberately at
+# 45 wpm came back as "Carriero es." The prompt budget is already full, so a
+# new term would only push an existing one out; a rule costs nothing.
+Carriero es -> Career OS
+Carriero S -> Career OS
+Carrier OS -> Career OS
+career o s -> Career OS
