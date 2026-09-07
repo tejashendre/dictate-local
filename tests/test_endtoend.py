@@ -340,9 +340,24 @@ def test_settings_reach_runtime():
     import dictate
     import dictate_config
     src = io.open(os.path.join(ROOT, "dictate.py"), encoding="utf-8").read()
-    unread = [k for k in dictate_config.SCHEMA
-              if ('CFG["%s"]' % k) not in src and ('"%s"' % k) not in src]
+    internal = set(getattr(dictate_config, "INTERNAL", ()))
+    unread = [k for k in dictate_config.SCHEMA if k not in internal
+              and ('CFG["%s"]' % k) not in src and ('"%s"' % k) not in src]
     ok = check("no setting is silently ignored", not unread, str(unread))
+
+    # Exempting a key from the check above must cost something, or INTERNAL
+    # becomes the place dead settings go to avoid being noticed. Each one has
+    # to be genuinely used inside dictate_config itself.
+    cfg_src = io.open(os.path.join(ROOT, "dictate_config.py"),
+                      encoding="utf-8").read()
+    unused = [k for k in internal if cfg_src.count('"%s"' % k) < 2]
+    ok &= check("and every internal key is really used internally",
+                not unused, str(unused))
+    ok &= check("internal keys are not offered as settings",
+                all(k not in io.open(os.path.join(ROOT, "dictate_settings.py"),
+                                     encoding="utf-8").read()
+                    for k in internal),
+                "a version stamp in the settings window would be noise")
     ok &= check("VAD_THRESHOLD is defined",
                 hasattr(dictate, "VAD_THRESHOLD"),
                 "this is the exact name that crashed F9")

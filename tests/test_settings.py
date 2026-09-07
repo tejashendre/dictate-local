@@ -181,10 +181,94 @@ def test_startup_shortcut():
     return ok
 
 
+def test_a_changed_default_reaches_an_existing_user():
+    print("\n  a changed default has to reach someone who already has a file")
+    import io
+    import json
+    import tempfile
+    import dictate_config as dc
+
+    # The bug this exists for. "stream" defaulted to True in v1 and Section 5.1
+    # changed it to False, but a stored value beats a default, so the whole v2
+    # decode path never reached the one person already using the tool. Nothing
+    # looked broken from outside: dictation worked, it was just measurably worse
+    # on the utterances streaming split, and nothing said so.
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "settings.json")
+    v1 = {"hotkey": "f9", "stream": True, "pause_s": 0.7,
+          "voice_level": 0.00853, "vad_threshold": 0.5959128065395096,
+          "model": "small.en"}
+    io.open(p, "w", encoding="utf-8").write(json.dumps(v1, indent=2))
+
+    cfg = dc.load(p)
+    ok = check("a v1 file has streaming retired", cfg["stream"] is False)
+    ok &= check("and is stamped so it happens once",
+                cfg["settings_version"] == dc.SETTINGS_VERSION)
+
+    disk = json.load(io.open(p, encoding="utf-8"))
+    ok &= check("the change is persisted, not just returned",
+                disk.get("stream") is False
+                and disk.get("settings_version") == dc.SETTINGS_VERSION)
+
+    # A migration that quietly dropped a calibrated value would be a worse bug
+    # than the one it fixes. voice_level and vad_threshold were measured from
+    # this microphone and cannot be recovered from a default.
+    ok &= check("voice_level survives untouched",
+                disk.get("voice_level") == 0.00853,
+                repr(disk.get("voice_level")))
+    ok &= check("vad_threshold survives to full precision",
+                disk.get("vad_threshold") == 0.5959128065395096,
+                repr(disk.get("vad_threshold")))
+    ok &= check("every original key is still there",
+                all(k in disk for k in v1),
+                str([k for k in v1 if k not in disk]))
+
+    # Once it has run, the user owns the setting again.
+    disk["stream"] = True
+    io.open(p, "w", encoding="utf-8").write(json.dumps(disk, indent=2))
+    ok &= check("turning it back on afterwards is respected",
+                dc.load(p)["stream"] is True,
+                "a migration that kept overruling a choice would be the bug")
+    ok &= check("and it is still respected on the next load",
+                dc.load(p)["stream"] is True)
+
+    # A fresh install has no file. The defaults already carry the new
+    # behaviour, so migrating would mean writing a file nobody asked for.
+    p2 = os.path.join(tempfile.mkdtemp(), "settings.json")
+    fresh = dc.load(p2)
+    ok &= check("a fresh install already has the new default",
+                fresh["stream"] is False)
+    ok &= check("and no settings file is created just by reading it",
+                not os.path.exists(p2))
+
+    # Garbage must not migrate into something that looks valid.
+    for name, blob in (("null", "null"), ("a list", "[1,2]"),
+                       ("not json", "<<<>>>"), ("empty", "")):
+        p3 = os.path.join(tempfile.mkdtemp(), "settings.json")
+        io.open(p3, "w", encoding="utf-8").write(blob)
+        try:
+            c = dc.load(p3)
+            ok &= check("%-8s still falls back to defaults" % name,
+                        c["hotkey"] == "f9" and c["stream"] is False)
+        except Exception as e:
+            ok &= check("%-8s still falls back to defaults" % name, False,
+                        "RAISED %s" % type(e).__name__)
+
+    # True == 1 in Python, so a bool stored where the version goes would have
+    # compared equal to version 1 and skipped the migration silently.
+    p4 = os.path.join(tempfile.mkdtemp(), "settings.json")
+    io.open(p4, "w", encoding="utf-8").write(
+        json.dumps({"stream": True, "settings_version": True}))
+    ok &= check("a bool version does not count as version 1",
+                dc.load(p4)["stream"] is False)
+    return ok
+
+
 def main():
     results.append(test_config_roundtrip())
     results.append(test_window_and_focus())
     results.append(test_startup_shortcut())
+    results.append(test_a_changed_default_reaches_an_existing_user())
     print("\n  %s" % ("PASS" if all(results) else "FAIL"))
     return 0 if all(results) else 1
 

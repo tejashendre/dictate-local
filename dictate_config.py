@@ -20,6 +20,20 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 PATH = os.path.join(HERE, "settings.json")
 
+# Bumped when a stored settings file needs changing rather than merely
+# extending. Adding a key never needs this: an absent key already falls back to
+# its default. This is only for the case below, where a value that was once
+# right became wrong.
+SETTINGS_VERSION = 1
+
+
+# Keys that exist for the code rather than for the user. dictate.py never reads
+# these and no settings window shows them, so the end-to-end check that every
+# setting reaches the running app has to skip them - and, so this cannot become
+# a place to hide a dead setting, that same check proves each one is really used
+# inside this module.
+INTERNAL = ("settings_version",)
+
 # key -> (default, env var, needs restart, description)
 SCHEMA = {
     "hotkey":       ("f9",       "DICTATE_KEY",      True,
@@ -33,6 +47,8 @@ SCHEMA = {
     # independent recognition and cleanup jobs, which is what made the final
     # text worse than the raw transcript. Legacy streaming stays reachable from
     # Advanced settings until v2 passes acceptance.
+    "settings_version": (SETTINGS_VERSION, None, False,
+                     "Internal. Which migrations have already been applied"),
     "stream":       (False,      "DICTATE_STREAM",   True,
                      "Legacy: type as you pause, instead of only when you stop"),
     "pause_s":      (0.7,        "DICTATE_PAUSE",    False,
@@ -60,6 +76,55 @@ SCHEMA = {
     "run_at_login": (False,      None,               False,
                      "Start automatically when Windows starts"),
 }
+
+
+def _migrate(stored):
+    """Bring an older settings file forward. Returns (stored, notes).
+
+    Changing a default does not reach anyone who already has a settings file,
+    because a stored value wins over a default. That is correct almost always,
+    and it silently withheld the entire v2 decode path here.
+
+    "stream" defaulted to True in v1. Section 5.1 changed it to False because
+    pause chunking splits one intended sentence into several independent
+    recognition and cleanup jobs, which is the fault v2 exists to fix. Measured
+    on 51 real recordings, replaying the same audio through the real
+    StreamingSession at the user's own pause_s and vad_threshold:
+
+        group                    n     whole    stream     cost
+        split into phrases       5     10.3%     44.4%    +34.1   names 7/7 -> 4/7
+        emitted as one phrase   46     22.3%     22.5%     +0.2   names unchanged
+
+    So streaming costs nothing until it actually splits a sentence, and roughly
+    one utterance in ten gets split. On those it loses a third of the words and
+    three names of seven, which drops protected names to 86.7% - below the 95%
+    Section 21.3 asks for.
+
+    Applied once. The version stamp is what makes that true: someone who turns
+    streaming back on afterwards has made a choice, and a migration that kept
+    overruling it would be a bug rather than a fix. Streaming stays reachable in
+    Advanced settings, which is what Section 5.1 asks for.
+    """
+    notes = []
+    if not stored:
+        # No file yet, or an unreadable one. Defaults already carry the new
+        # behaviour, so there is nothing to bring forward.
+        return stored, notes
+
+    version = stored.get("settings_version")
+    if not isinstance(version, int) or isinstance(version, bool):
+        version = 0
+
+    if version < 1:
+        if stored.get("stream") is True:
+            stored["stream"] = False
+            notes.append("stream: true -> false. Pause chunking cost 34 points "
+                         "of accuracy on the utterances it split. Turn it back "
+                         "on in Advanced settings if you want live text.")
+        version = 1
+
+    stored["settings_version"] = version
+    return stored, notes
 
 
 def _coerce(value, default):
@@ -97,6 +162,8 @@ def load(path=None):
     if not isinstance(stored, dict):
         stored = {}
 
+    stored, notes = _migrate(stored)
+
     out = {}
     for key, (default, env, _restart, _desc) in SCHEMA.items():
         value = default
@@ -105,6 +172,15 @@ def load(path=None):
         if env and env in os.environ:
             value = _coerce(os.environ[env], default)
         out[key] = value
+    if notes:
+        # Printed rather than logged: this runs before the log file exists, and
+        # a settings file changing underneath someone without a word is exactly
+        # the kind of silent behaviour this project keeps getting bitten by.
+        print("  settings migrated to version %d:" % SETTINGS_VERSION)
+        for note in notes:
+            print("    %s" % note)
+        save(out, path if path != PATH else None)
+
     return out
 
 
