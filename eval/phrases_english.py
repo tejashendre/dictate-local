@@ -149,7 +149,9 @@ PHRASES = [
     ("dates_times",
      "Let us move the call to Tuesday the 15th at 9:30 in the morning.",
      "Let us move the call to Tuesday the 15th at 9:30 in the morning.",
-     [], ["15", "9", "30"]),
+     # "9:30" is one value, not two. Declaring 9 and 30 separately failed a
+     # model that correctly wrote 9.30.
+     [], ["15", "9:30"]),
     ("dates_times",
      "The deadline is the 30th of November 2026.",
      "The deadline is the 30th of November 2026.",

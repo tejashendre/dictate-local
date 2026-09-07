@@ -163,3 +163,7 @@ wisper flow -> Wispr Flow
 whisper flow -> Wispr Flow
 C-Translate two -> ctranslate2
 c translate two -> ctranslate2
+int8, load section -> int8 float16
+int 8, load section -> int8 float16
+float sixteen -> float16
+int eight -> int8

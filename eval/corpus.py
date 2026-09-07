@@ -99,7 +99,7 @@ def _numbers_in(text):
     the number: "August 2024." must satisfy a protected value of "2024", or
     every number ending a sentence is scored as wrong forever.
     """
-    return [n.rstrip(".,") for n in re.findall(r"\d[\d,.]*", text or "")]
+    return [n.rstrip(".,") for n in re.findall(r"\d[\d,.:]*", text or "")]
 
 
 # A take whose length is wildly out of proportion to its phrase is not a slow

@@ -111,10 +111,21 @@ def protected_numbers(numbers, hyp):
     a scorer that normalised them would stop detecting an expensive error."""
     if not numbers:
         return 0, 0
-    got = set(re.findall(r"\d[\d,.]*", hyp or ""))
+    got = set(re.findall(r"\d[\d,.:]*", hyp or ""))
     # A trailing period from sentence punctuation must not fail a match.
     got |= {g.rstrip(".") for g in got}
-    found = sum(1 for n in numbers if n in got or n.rstrip(".") in got)
+    # A time is one value however it is punctuated. Tejas says "nine thirty";
+    # the model may write 9:30 or 9.30 and both are correct, so the separator
+    # is normalised before comparing. This does not loosen anything else: 1.6
+    # still fails against 16, because those are different values rather than
+    # two spellings of one.
+    got |= {g.replace(":", ".") for g in got}
+    got |= {g.replace(".", ":") for g in got}
+    found = 0
+    for n in numbers:
+        forms = {n, n.rstrip("."), n.replace(":", "."), n.replace(".", ":")}
+        if forms & got:
+            found += 1
     return found, len(numbers)
 
 
