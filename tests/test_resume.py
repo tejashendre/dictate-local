@@ -16,6 +16,7 @@ neither.
 
     python tests/test_resume.py
 """
+import io
 import os
 
 # Never let a test write to the live settings file: a test's audio levels
@@ -192,6 +193,49 @@ def main():
     ok_all &= check("still alive and retried after the first failure",
                     boom["n"] >= 2, "re-arm attempted %d times" % boom["n"])
     ok_all &= check("thread did not die", t3.is_alive() or quit3.is_set())
+
+    print("\n  7. re-arming reinstalls the OS hook, not just the callback")
+    # The failure this catches is the one that looked fixed twice.
+    #
+    # keyboard.unhook_all() clears the handler table but leaves the listener's
+    # `listening` flag True. start_if_necessary() then sees it is already
+    # listening and returns without doing anything, so the Windows low-level
+    # hook that Modern Standby removed is never reinstalled. add_hotkey()
+    # succeeds, "re-armed after resume: hotkey, microphone" is written to the
+    # log, and not one key event ever arrives again.
+    #
+    # Observed after a 300 minute sleep with all three recovery steps logged as
+    # complete and F9 still dead.
+    src = io.open(os.path.join(ROOT, "dictate.py"), encoding="utf-8").read()
+    body = src[src.index("def _rearm"):src.index("def ", src.index("def _rearm") + 8)]
+    code = "\n".join(ln.split("#")[0] for ln in body.split("\n"))
+
+    ok_all &= check("_rearm clears the listener flag",
+                    "listening = False" in code,
+                    "otherwise start_if_necessary() is a no-op")
+    ok_all &= check("it happens before the hotkey is re-registered",
+                    code.index("listening = False") < code.index("add_hotkey"),
+                    "clearing it afterwards would be too late")
+    ok_all &= check("the old listener threads are left alone",
+                    "listening_thread" not in code
+                    and "processing_thread" not in code,
+                    "joining a thread blocked in a removed hook hangs, so the "
+                    "old pair are left to be collected at exit")
+
+    # And the library really does behave the way the fix assumes.
+    import keyboard
+    listener = keyboard._listener
+    ok_all &= check("the listener exposes the flag the fix clears",
+                    hasattr(listener, "listening"))
+    import inspect
+    starter = inspect.getsource(listener.start_if_necessary)
+    ok_all &= check("start_if_necessary is gated on that flag",
+                    "if not self.listening" in starter,
+                    "this is why clearing it forces a fresh hook")
+    unhook = inspect.getsource(keyboard.unhook_all)
+    ok_all &= check("and unhook_all alone never clears it",
+                    "listening" not in unhook.split("def ")[1],
+                    "which is the whole bug")
 
     print("\n  %s" % ("PASS" if ok_all else "FAIL"))
     return 0 if ok_all else 1

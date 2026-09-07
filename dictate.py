@@ -673,6 +673,31 @@ def _rearm():
         keyboard.unhook_all()
     except Exception:
         pass
+
+    # unhook_all() is not enough, and this is why the first fix looked like it
+    # worked and did not. It clears the handler table but leaves the listener's
+    # `listening` flag True, so the next add_hotkey() calls
+    # start_if_necessary(), sees listening is already True, and returns without
+    # doing anything. The Windows low-level hook that standby removed is never
+    # reinstalled.
+    #
+    # The result is the worst shape of failure: re-arming reports success,
+    # "re-armed after resume: hotkey, microphone" appears in the log, and no
+    # key event ever arrives again. Confirmed after a 300 minute sleep with all
+    # three recovery steps logged as done and F9 still dead.
+    #
+    # Clearing the flag forces init(), which calls _os_keyboard.init() and
+    # spawns fresh listening and processing threads with a new OS hook. The old
+    # pair are daemon threads on a dead hook; they are left to be collected at
+    # exit rather than joined, because joining a thread blocked in a removed
+    # Windows hook is how this hangs instead of recovering.
+    try:
+        listener = getattr(keyboard, "_listener", None)
+        if listener is not None and getattr(listener, "listening", False):
+            listener.listening = False
+    except Exception as e:
+        print("  could not reset the keyboard listener (%s)" % type(e).__name__)
+
     try:
         keyboard.add_hotkey(HOTKEY, _toggle.set, suppress=True)
         ok.append("hotkey")
