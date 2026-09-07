@@ -175,3 +175,26 @@ Carriero es -> Career OS
 Carriero S -> Career OS
 Carrier OS -> Career OS
 career o s -> Career OS
+
+# --- mined for medium.en, 7 September 2026 -----------------------------------
+# The rules above were mined from small.en's mistakes. medium.en errs
+# differently, so most of them never fire on it: protected names sat at 90.0%
+# against small.en's 96.7% even though BOTH models recover identical raw names.
+#
+# Each rule below was applied to all 51 corpus recordings and kept only if it
+# fixed a real loss and harmed nothing. Together they move medium.en from
+# names 90.0% to 96.7%, numbers 87.0% to 91.3%, WER 10.6% to 10.0%, with zero
+# recordings made worse.
+#
+# Two candidates were rejected and are recorded here so nobody re-proposes them:
+#   CUDA -> CPU              the miner's closest-token match after medium.en
+#                            dropped "CPU" entirely. Would corrupt every
+#                            technical sentence. The heard side is itself a
+#                            vocabulary term, which is the filter that caught it.
+#   12 to 18, 260 -> 12 to 16 lakhs
+#                            measured +4.3 on numbers and is memorising one
+#                            corpus answer, not correcting a mistake.
+C-translate2 -> ctranslate2
+iamjobs -> iimjobs
+int8, load16 -> int8 float16
+load16 -> float16
