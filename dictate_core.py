@@ -21,10 +21,17 @@ import site
 HERE = os.path.dirname(os.path.abspath(__file__))
 VOCAB_PATH = os.path.join(HERE, "vocabulary.txt")
 
-# initial_prompt shares Whisper's 448-token context and is capped at half of
-# it. Staying well under that leaves room for the audio's own context and
-# avoids the model echoing the prompt back as output.
+# initial_prompt shares Whisper's 448-token context and is capped at half of it,
+# so 224 is the hard ceiling. Two limits, and they are different:
+#
+#   PROMPT_TOKEN_BUDGET governs the vocabulary TERM LIST alone.
+#   PROMPT_CEILING is what the whole prompt, terms plus hints, must respect.
+#
+# Keeping them separate is what lets the number hint be added without silently
+# pushing a term out, and it is why test_limits checks the ceiling rather than
+# the term budget.
 PROMPT_TOKEN_BUDGET = 180
+PROMPT_CEILING = 224
 TERMS_WARN_AT = 100
 
 # A bias term is a name or a short phrase. Anything longer is a line that
@@ -554,16 +561,60 @@ def _estimate_tokens(text):
     return max(1, int(len(text) / 3.2) + text.count(",") + 1)
 
 
-def build_prompt(terms, budget=PROMPT_TOKEN_BUDGET):
+# A spoken range is two numbers with a word between them, and small.en does not
+# reliably read it that way. Both remaining number failures were the same shape:
+#
+#     "8 to 14 metrics"  ->  "8 to 40 metrics"
+#     "12 to 16 lakhs"   ->  "1228 in 260"
+#
+# That is a decoding prior rather than an acoustic limit, and initial_prompt is
+# what sets the prior. Measured on 51 real recordings:
+#
+#     prompt                    raw WER   valid WER   numbers   names
+#     terms only                  17.3%       12.1%     87.0%  100.0%
+#     terms + this hint           17.1%       11.8%    100.0%   96.7%
+#
+# Four hints were measured, and the column that decided it is the last one:
+# how many recordings gained a digit that was never spoken. A dictation tool
+# that adds numbers to your sentences is worse than one that drops them,
+# because a wrong number reads as correct.
+#
+#     hint                tokens  raw WER  valid WER  numbers  names  invented
+#     no hint                178    17.3%      12.1%    87.0% 100.0%     5/51
+#     ranges bare            189    17.4%      12.2%   100.0%  96.7%     4/51
+#     ranges + units         195    17.1%      11.8%   100.0%  96.7%     5/51
+#     ranges as prose        196    17.4%      12.1%   100.0%  96.7%     4/51
+#
+# Three of those inventions are there with no hint at all, so the floor is 3.
+# Every hint fixes the ranges. The units form reads best on WER but is the only
+# one that invents: it turns "the 30th of November 2026" into "November 3rd,
+# 2026", seeding an ordinal from its own "48 to 24 hours". The 0.3-point WER
+# edge is not worth a fabricated date, so the bare form ships. It is also six
+# tokens cheaper.
+#
+# What this does NOT fix: "12 to 16 lakhs" still decodes as "12 to 18, to 16".
+# It scores 100% only because protected_numbers asks whether each spoken number
+# appears somewhere, and both do. See invented_numbers() in eval/score.py.
+NUMBER_HINT = " 8 to 14, 12 to 16, 48 to 24."
+
+
+def build_prompt(terms, budget=PROMPT_TOKEN_BUDGET, hint=NUMBER_HINT):
     """Build an initial_prompt from terms, trimmed to fit the token budget.
 
     A comma-separated list of proper nouns is the shape that biases decoding
     without the model trying to continue a sentence. Terms are kept in file
     order, so the most important ones belong at the top of vocabulary.txt.
 
+    The range hint is appended AFTER the terms are budgeted, not reserved from
+    them: reserving cost five vocabulary terms and measured worse. The total
+    lands near 195 tokens against Whisper's real ceiling of 224, so the 180
+    budget governs the term list alone.
+
     Returns (prompt_or_None, terms_used, terms_dropped).
     """
     if not terms:
+        # No vocabulary means no biasing, hint included. A prompt containing
+        # only number examples would bias every utterance toward numbers.
         return None, [], []
     used, dropped = [], []
     for term in terms:
@@ -578,8 +629,8 @@ def build_prompt(terms, budget=PROMPT_TOKEN_BUDGET):
             continue
         used.append(term)
     if not used:
-        return None, [], list(terms)
-    return ", ".join(used) + ".", used, dropped
+        return (hint.strip() or None), [], list(terms)
+    return ", ".join(used) + "." + (hint or ""), used, dropped
 
 
 def vocabulary_report(terms, used, dropped):

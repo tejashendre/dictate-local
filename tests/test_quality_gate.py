@@ -267,16 +267,75 @@ def test_the_product_on_recordings_that_measure_it():
     return ok
 
 
+def accepted_baseline():
+    """The run the shipped configuration produced, and why it was accepted.
+
+    Comparing each run against the chronologically previous one sounds right and
+    is not: a rejected experiment still lands in the results directory, and the
+    next real run is then measured against a configuration nobody shipped. That
+    is how "fan_noise +5.0 points" was once reported for a change that never
+    touched noise handling. It was being compared to a discarded prompt rather
+    than to the code in git.
+
+    So the baseline is named explicitly in baseline.txt: the first line is the
+    result file, the rest is the reason it was accepted. Requiring the reason is
+    the point. A regression cannot be adopted by re-running until the previous
+    number moves; somebody has to write down what was traded for what.
+    """
+    p = os.path.join(RESULTS, "baseline.txt")
+    if not os.path.exists(p):
+        return None, ""
+    try:
+        raw = io.open(p, encoding="utf-8").read()
+    except Exception:
+        return None, ""
+    lines = [l.rstrip() for l in raw.splitlines()]
+    lines = [l for l in lines if l.strip() and not l.lstrip().startswith("#")]
+    if not lines:
+        return None, ""
+    return lines[0].strip(), "\n".join(lines[1:]).strip()
+
+
 def test_no_category_regressed():
-    print("\n  2. no category got worse than the run before it")
+    print("\n  2. no category got worse than the accepted baseline")
     found = runs()
     same_model = [(n, r) for n, r in found if r.get("name") == "small.en"]
     if len(same_model) < 2:
         return check("not enough runs to compare yet", True,
                      "%d run(s) for small.en" % len(same_model))
 
-    (older_name, older), (newer_name, newer) = same_model[-2], same_model[-1]
+    base_name, reason = accepted_baseline()
+    picked = [(n, r) for n, r in same_model if n == base_name]
+
+    if picked and same_model[-1][0] == base_name:
+        # The newest run is the baseline itself, which is what "I just accepted
+        # this configuration" looks like. There is no candidate to test, and
+        # comparing the baseline to whatever ran before it would re-introduce
+        # the exact bug this function exists to remove: the run before it is
+        # often a rejected experiment.
+        #
+        # So the check becomes the one that still has teeth here - an accepted
+        # baseline must say what it cost. Without that requirement a regression
+        # could be adopted by moving the pointer and saying nothing.
+        print("      %s is the accepted baseline; nothing newer to test"
+              % base_name)
+        for line in (reason or "").splitlines():
+            print("      %s" % line)
+        return check("the acceptance is justified in writing",
+                     len(reason.strip()) > 40,
+                     "baseline.txt must record what the change traded")
+
+    if picked:
+        older_name, older = picked[-1]
+        newer_name, newer = same_model[-1]
+    else:
+        if base_name:
+            print("      baseline.txt names %s, which is not on disk" % base_name)
+        (older_name, older), (newer_name, newer) = same_model[-2], same_model[-1]
+
     print("      %s  ->  %s" % (older_name, newer_name))
+    for line in (reason or "").splitlines():
+        print("      %s" % line)
 
     a = older["summary"].get("by_category", {})
     b = newer["summary"].get("by_category", {})

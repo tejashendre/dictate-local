@@ -125,10 +125,20 @@ def test_one_bad_term_cannot_disable_vocabulary():
 
     # A runaway mine_vocabulary run must still respect the budget.
     prompt, used, dropped = core.build_prompt(["Term%d" % i for i in range(2000)])
-    ok &= check("2000 terms still fit the budget",
+    # The term budget governs the term list; the ceiling governs the whole
+    # prompt, terms plus the number hint. Checking the term budget here would
+    # fail the moment any hint is added, which is a change in what the prompt
+    # contains rather than a runaway vocabulary.
+    ok &= check("2000 terms still fit under Whisper's ceiling",
                 prompt is not None
-                and core._estimate_tokens(prompt) <= core.PROMPT_TOKEN_BUDGET,
-                "%d tokens" % core._estimate_tokens(prompt))
+                and core._estimate_tokens(prompt) <= core.PROMPT_CEILING,
+                "%d tokens, ceiling %d"
+                % (core._estimate_tokens(prompt), core.PROMPT_CEILING))
+    terms_only, _u, _d = core.build_prompt(
+        ["Term%d" % i for i in range(2000)], hint="")
+    ok &= check("and the term list alone stays inside its own budget",
+                core._estimate_tokens(terms_only) <= core.PROMPT_TOKEN_BUDGET,
+                "%d tokens" % core._estimate_tokens(terms_only))
 
     ok &= check("an empty list is still None, not a crash",
                 core.build_prompt([])[0] is None)

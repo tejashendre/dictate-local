@@ -89,6 +89,37 @@ def test_protected_values():
                 "this is the expensive-typo case")
     found, _ = S.protected_numbers(["2026"], "the deadline is November 2026.")
     ok &= check("trailing sentence punctuation still matches", found == 1)
+
+    # The case that made this function necessary. protected_numbers scores the
+    # line below a perfect 2 of 2, because both spoken numbers are present, and
+    # the sentence is still wrong. A gate reading 100% while the output invents
+    # a salary band is a gate reporting the scorer, not the product.
+    said = "The salary band is 12 to 16 lakhs."
+    hyp = "The salary band is 12 to 18, to 16."
+    found, total = S.protected_numbers(["12", "16"], hyp)
+    ok &= check("a wrong sentence can still keep every number",
+                found == 2 and total == 2, "which is why the next check exists")
+    ok &= check("but the invented one is counted",
+                S.invented_numbers(said, hyp) == 1, "the 18 nobody said")
+
+    ok &= check("an ordinal the model added is invented",
+                S.invented_numbers("The deadline is the 30th of November 2026.",
+                                   "the 30th of November 3rd, 2026") == 1)
+    ok &= check("an unchanged sentence invents nothing",
+                S.invented_numbers("We covered 3000 companies",
+                                   "We covered 3000 companies") == 0)
+    # 9:30 and 9.30 are one value. Counting the spelling as an invention would
+    # make the metric fire on every time Tejas dictates.
+    ok &= check("a time is one value however it is punctuated",
+                S.invented_numbers("meeting at 9:30", "meeting at 9.30") == 0)
+    ok &= check("a real extra time is still caught",
+                S.invented_numbers("meeting at 9:30",
+                                   "meeting at 9:30 and 10:00") == 1)
+    ok &= check("1.6 read as 16 counts as invented",
+                S.invented_numbers("I need 1.6 million", "I need 16 million") == 1,
+                "the expensive typo, seen from the other side")
+    ok &= check("no numbers at all is not a failure",
+                S.invented_numbers("", "no numbers here") == 0)
     return ok
 
 

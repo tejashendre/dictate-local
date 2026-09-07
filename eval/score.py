@@ -129,6 +129,42 @@ def protected_numbers(numbers, hyp):
     return found, len(numbers)
 
 
+def _numeric_tokens(text):
+    """Every number in a string, one canonical form per value.
+
+    protected_numbers matches by generating every spelling of a value and
+    testing for overlap, which is right for "did this survive". It is wrong for
+    a set difference: {"16", "16.", "16:"} minus {"16"} leaves two phantom
+    values that are the same number. So here each token is reduced instead of
+    expanded - trailing punctuation dropped, a time separator normalised - and
+    two strings differ only when they are actually different numbers.
+    """
+    out = set()
+    for g in re.findall(r"\d[\d,.:]*", text or ""):
+        g = g.rstrip(".,:").replace(":", ".")
+        if g:
+            out.add(g)
+    return out
+
+
+def invented_numbers(said, hyp):
+    """How many numbers appear in the output that were never spoken.
+
+    protected_numbers only asks whether each spoken number survived, so an
+    output can score a perfect 2 of 2 and still be wrong:
+
+        said     The salary band is 12 to 16 lakhs.
+        output   The salary band is 12 to 18, to 16.
+
+    Both 12 and 16 are present, so that scores 100%, and a reader gets a salary
+    band that does not exist. This counts the other direction. It is measured
+    against what was said rather than against the protected list, because the
+    protected list holds only the values worth guarding and a sentence may
+    contain other numbers that are perfectly correct.
+    """
+    return len(_numeric_tokens(hyp) - _numeric_tokens(said))
+
+
 def hallucinated_on_silence(hyp):
     """True when a silent recording produced any word at all.
 
@@ -169,6 +205,7 @@ def score_one(rec, raw, corrected, final, seconds=None, audio_seconds=None):
         "names_found_raw": n_r, "names_total": t_r,
         "names_found_final": n_f,
         "numbers_found_final": d_f, "numbers_total": u_f,
+        "numbers_invented": invented_numbers(said, final),
 
         "seconds": seconds,
         "audio_seconds": audio_seconds,
@@ -212,6 +249,14 @@ def aggregate(rows):
         "names_total": names_total,
         "number_accuracy": (nums_found / nums_total) if nums_total else None,
         "numbers_total": nums_total,
+        # Kept separate from number_accuracy rather than folded into it, so the
+        # ten runs already recorded stay comparable and so the two failures
+        # stay distinguishable: losing a number and inventing one are different
+        # faults with different fixes.
+        "numbers_invented": sum(r.get("numbers_invented", 0) for r in speech),
+        "clean_number_recordings":
+            (sum(1 for r in speech if not r.get("numbers_invented"))
+             / len(speech)) if speech else None,
 
         "missing_words": sum(r["missing_words"] for r in speech),
         "added_words": sum(r["added_words"] for r in speech),
@@ -270,6 +315,11 @@ def report(summary, name="", resources=None):
         L.append("  %-26s %6.1f%%   (of %d numbers)"
                  % ("protected numbers", 100 * summary["number_accuracy"],
                     summary["numbers_total"]))
+    if summary.get("clean_number_recordings") is not None:
+        L.append("  %-26s %6.1f%%   (%d numbers appear that were never spoken)"
+                 % ("recordings inventing none",
+                    100 * summary["clean_number_recordings"],
+                    summary["numbers_invented"]))
     L.append("")
     L.append("  %-26s %6d words" % ("missed", summary["missing_words"]))
     L.append("  %-26s %6d words   (invented, never spoken)"
