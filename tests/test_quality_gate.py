@@ -36,6 +36,12 @@ sys.path.insert(0, os.path.join(ROOT, "eval"))
 
 RESULTS = os.path.join(ROOT, "eval", "private", "results")
 
+# Categories written during design rather than sampled from real use. Every
+# one was scripted with correction markers that appear zero times in 928 lines
+# of Tejas's dictation, so they measure whether the tool performs a
+# transformation he never asks for.
+SCRIPTED = ("false_starts", "self_correction", "urls_emails")
+
 # Section 21.3, in the order that table lists them. The fourth field records
 # whether the corpus can answer the question at all, because a gap caused by a
 # broken measurement is not a product defect and reporting the two identically
@@ -100,18 +106,36 @@ def runs():
     return out
 
 
-def metrics(result):
-    """Flatten a result into the values the gates are written against."""
+def metrics(result, valid_only=False):
+    """Flatten a result into the values the gates are written against.
+
+    valid_only recomputes the aggregates over the recordings whose category can
+    actually answer its question, which is the same judgement already applied to
+    the per-category gates. Averaging over a measurement known to be broken
+    reports the harness, not the product.
+    """
     s = result["summary"]
     cats = s.get("by_category", {})
 
     def cat(name, key):
         return cats.get(name, {}).get(key)
 
+    rows = [r for r in result.get("rows", []) if not r.get("silent")]
+    subset = [r for r in rows if r["category"] not in SCRIPTED]
+    if valid_only and subset:
+        n = len(subset)
+        agg_raw = sum(r["wer_raw"] for r in subset) / n
+        agg_final = sum(r["wer_final"] for r in subset) / n
+        agg_exact = sum(1 for r in subset if r["exact_final"]) / n
+    else:
+        agg_raw = s.get("wer_raw")
+        agg_final = s.get("wer_final")
+        agg_exact = s.get("exact_final")
+
     out = {
-        "wer_raw": s.get("wer_raw"),
-        "wer_final": s.get("wer_final"),
-        "exact_final": s.get("exact_final"),
+        "wer_raw": agg_raw,
+        "wer_final": agg_final,
+        "exact_final": agg_exact,
         "name_accuracy_final": s.get("name_accuracy_final"),
         "number_accuracy": s.get("number_accuracy"),
         "silence_false_positive_rate": s.get("silence_false_positive_rate"),
@@ -144,8 +168,11 @@ def test_gates_are_reported():
                      "run: python eval/bench_real.py --models small.en")
 
     name, latest = found[-1]
-    m = metrics(latest)
+    m = metrics(latest, valid_only=True)
+    m_all = metrics(latest, valid_only=False)
     print("      latest run: %s, model %s" % (name, latest.get("name")))
+    print("      aggregates measured over the categories that can answer;")
+    print("      the all-speech figure is shown beside each in brackets.")
     print()
 
     met = gaps = unknown = corpus = 0
@@ -173,7 +200,14 @@ def test_gates_are_reported():
         else:
             gaps += 1
             mark = "GAP "
-        print("      %s %-30s %-14s (need %s)" % (mark, label, shown, want))
+        other = m_all.get(key)
+        beside = ""
+        if other is not None and m.get(key) is not None and other != m.get(key):
+            beside = ("[all %.1f%%]" % (100 * other)
+                      if key != "final_not_worse_than_raw"
+                      else "[all %s]" % ("yes" if other else "NO"))
+        print("      %s %-30s %-14s (need %-9s) %s"
+              % (mark, label, shown, want, beside))
 
     print()
     print("      %d met, %d real gap, %d corpus cannot answer, %d not measured"
@@ -188,13 +222,6 @@ def test_gates_are_reported():
     # reached is reported, not hidden, and never fixed by editing the corpus.
     return check("all %d gates evaluated" % len(GATES),
                  met + gaps + corpus + unknown == len(GATES))
-
-
-# Categories written during design rather than sampled from real use. Every
-# one was scripted with correction markers that appear zero times in 928 lines
-# of Tejas's dictation, so they measure whether the tool performs a
-# transformation he never asks for.
-SCRIPTED = ("false_starts", "self_correction", "urls_emails")
 
 
 def test_the_product_on_recordings_that_measure_it():
