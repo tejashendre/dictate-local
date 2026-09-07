@@ -282,6 +282,14 @@ def log_line(text, held, took, speech_s=0.0):
     this project was calibrated against a synthetic voice. Streamed phrases
     used to log no duration at all, which threw that measurement away.
     """
+    # A test must never write into the real transcript. test_endtoend pushes a
+    # synthetic corpus through the real pipeline, and every phrase it spoke
+    # landed here as though Tejas had said it. That is not just clutter: this
+    # file is the only measurement of his real speaking rate on real speech, so
+    # synthetic lines corrupt the one number it exists to produce. Same fault as
+    # the run that once saved a test's audio level as his voice level.
+    if os.environ.get("DICTATE_TESTING") == "1":
+        return
     try:
         with open(LOG_PATH, "a", encoding="utf-8") as f:
             stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
