@@ -223,6 +223,22 @@ def run_model(name, records, prompt, terms, allow_download=False):
     peak_vram = max(0, vram_used() - base_vram)
 
     rules = core.load_corrections()
+
+    # Gate one in Section 21.3 asks what reaches the DOCUMENT, so the silence
+    # clips are put through the same three defences the running app uses. The
+    # floor is learned from the speech recordings first, exactly as it is
+    # learned from real use, because a floor calibrated on nothing rejects
+    # nothing.
+    voice = core.VoiceLevel()
+    for rec in records:
+        if rec.get("category") == "silence":
+            continue
+        path = C.audio_path(rec)
+        if not os.path.exists(path):
+            continue
+        audio, _d = load_wav(path)
+        voice.learn(core.analyse(audio, threshold=None).rms)
+
     rows = []
     for rec in records:
         path = C.audio_path(rec)
@@ -251,6 +267,17 @@ def run_model(name, records, prompt, terms, allow_download=False):
                 condition_on_previous_text=False, initial_prompt=prompt)
             raw = " ".join(s.text.strip() for s in segs).strip()
         seconds = time.time() - t0
+
+        # A silence clip the product would never type is not a false
+        # positive. Speech is deliberately not gated here: accuracy and
+        # insertion are separate questions, and running speech through the
+        # filter would let it hide a weak recogniser.
+        if rec.get("category") == "silence":
+            look = core.analyse(audio, threshold=None)
+            background, _floor = voice.is_background(look.rms)
+            if (background or not look.has_speech()
+                    or core.looks_hallucinated(raw, look.speech_seconds)):
+                raw = ""
 
         corrected, _fired = core.apply_corrections(raw, rules)
         corrected, _snapped = core.fuzzy_snap(corrected, terms)

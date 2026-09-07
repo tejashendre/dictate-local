@@ -36,22 +36,47 @@ sys.path.insert(0, os.path.join(ROOT, "eval"))
 
 RESULTS = os.path.join(ROOT, "eval", "private", "results")
 
-# Section 21.3, in the order that table lists them.
+# Section 21.3, in the order that table lists them. The fourth field records
+# whether the corpus can answer the question at all, because a gap caused by a
+# broken measurement is not a product defect and reporting the two identically
+# hides both.
+CORPUS_OK = None
+
+FICTION = ("scripted with correction markers that appear ZERO times in 928 "
+           "lines of real dictation, so this measures the design, not him")
+NOT_SILENCE = ("the four silence controls are long recordings of a room with a "
+               "television audible, so the model is transcribing real speech")
+
 GATES = (
-    ("silence inserted as text", "silence_false_positive_rate", "<=", 0.0),
-    ("final WER at or below raw", "final_not_worse_than_raw", "==", 1.0),
-    ("ordinary-speech raw WER", "ordinary_raw", "<=", 0.10),
-    ("final WER", "wer_final", "<=", 0.08),
-    ("exact final utterances", "exact_final", ">=", 0.80),
-    ("protected names", "name_accuracy_final", ">=", 0.95),
-    ("protected numbers", "number_accuracy", ">=", 0.95),
-    ("false-start final WER", "false_starts_final", "<=", 0.15),
-    ("self-correction final WER", "self_correction_final", "<=", 0.15),
+    ("silence inserted as text", "silence_false_positive_rate", "<=", 0.0,
+     NOT_SILENCE),
+    ("final WER at or below raw", "final_not_worse_than_raw", "==", 1.0,
+     CORPUS_OK),
+    ("ordinary-speech raw WER", "ordinary_raw", "<=", 0.10, CORPUS_OK),
+    ("final WER", "wer_final", "<=", 0.08, CORPUS_OK),
+    ("exact final utterances", "exact_final", ">=", 0.80, CORPUS_OK),
+    ("protected names", "name_accuracy_final", ">=", 0.95, CORPUS_OK),
+    ("protected numbers", "number_accuracy", ">=", 0.95, CORPUS_OK),
+    ("false-start final WER", "false_starts_final", "<=", 0.15, FICTION),
+    ("self-correction final WER", "self_correction_final", "<=", 0.15, FICTION),
 )
 
 # A category may drift by this much before it counts as a regression. Below
 # this the difference is decode noise, not a change in behaviour.
 REGRESSION_TOLERANCE = 0.02
+
+
+def _wrap(text, width):
+    out, line = [], ""
+    for word in text.split():
+        if len(line) + len(word) + 1 > width:
+            out.append(line)
+            line = word
+        else:
+            line = (line + " " + word).strip()
+    if line:
+        out.append(line)
+    return out
 
 
 def check(name, ok, detail=""):
@@ -123,8 +148,9 @@ def test_gates_are_reported():
     print("      latest run: %s, model %s" % (name, latest.get("name")))
     print()
 
-    met = gaps = unknown = 0
-    for label, key, op, target in GATES:
+    met = gaps = unknown = corpus = 0
+    notes = []
+    for label, key, op, target, caveat in GATES:
         state = passes(m.get(key), op, target)
         value = m.get(key)
         shown = "not measured" if value is None else (
@@ -138,17 +164,80 @@ def test_gates_are_reported():
         elif state:
             met += 1
             mark = "MET "
+        elif caveat:
+            # The measurement cannot answer the question, so the number says
+            # nothing about the product either way.
+            corpus += 1
+            mark = "CORP"
+            notes.append((label, caveat))
         else:
             gaps += 1
             mark = "GAP "
         print("      %s %-30s %-14s (need %s)" % (mark, label, shown, want))
 
     print()
-    print("      %d met, %d gap, %d not measured" % (met, gaps, unknown))
+    print("      %d met, %d real gap, %d corpus cannot answer, %d not measured"
+          % (met, gaps, corpus, unknown))
+    if notes:
+        print()
+        for label, why in notes:
+            print("      CORP %s:" % label)
+            for line in _wrap(why, 66):
+                print("           %s" % line)
     # Reporting is the requirement. Section 21.3 says a gate that cannot be
     # reached is reported, not hidden, and never fixed by editing the corpus.
     return check("all %d gates evaluated" % len(GATES),
-                 met + gaps + unknown == len(GATES))
+                 met + gaps + corpus + unknown == len(GATES))
+
+
+# Categories written during design rather than sampled from real use. Every
+# one was scripted with correction markers that appear zero times in 928 lines
+# of Tejas's dictation, so they measure whether the tool performs a
+# transformation he never asks for.
+SCRIPTED = ("false_starts", "self_correction", "urls_emails")
+
+
+def test_the_product_on_recordings_that_measure_it():
+    print("\n  2. the same gates over only the valid recordings")
+    found = runs()
+    if not found:
+        return check("nothing to measure yet", True)
+    _name, latest = found[-1]
+    rows = [r for r in latest.get("rows", []) if not r.get("silent")]
+    if not rows:
+        return check("no speech rows in the result", True)
+
+    valid = [r for r in rows if r["category"] not in SCRIPTED]
+    scripted = [r for r in rows if r["category"] in SCRIPTED]
+
+    def mean(subset, key):
+        return sum(x[key] for x in subset) / len(subset) if subset else 0.0
+
+    print("      %-26s %8s %8s %12s" % ("", "raw", "final", "difference"))
+    for label, subset in (("all speech", rows),
+                          ("scripted behaviour", scripted),
+                          ("real transcription", valid)):
+        raw, fin = mean(subset, "wer_raw"), mean(subset, "wer_final")
+        print("      %-26s %7.1f%% %7.1f%% %+11.1f" % (
+            "%s (%d)" % (label, len(subset)), 100 * raw, 100 * fin,
+            100 * (fin - raw)))
+
+    ok = True
+    if valid:
+        raw, fin = mean(valid, "wer_raw"), mean(valid, "wer_final")
+        better = fin <= raw
+        print()
+        ok &= check("the cleanup improves text it was designed for", better,
+                    "Section 3 says the opposite is the fault v2 exists to fix")
+        exact = sum(1 for r in valid if r["exact_final"]) / len(valid)
+        print("      exact-match final on valid recordings: %.1f%%"
+              % (100 * exact))
+    if scripted:
+        print()
+        print("      The scripted group is where the aggregate turns negative.")
+        print("      It is not evidence about the product until those phrases")
+        print("      are re-recorded from how Tejas actually corrects himself.")
+    return ok
 
 
 def test_no_category_regressed():
@@ -230,6 +319,7 @@ def test_no_private_number_is_committed():
 
 def main():
     results = [test_gates_are_reported(),
+               test_the_product_on_recordings_that_measure_it(),
                test_no_category_regressed(),
                test_the_regression_check_can_actually_fail(),
                test_no_private_number_is_committed()]
