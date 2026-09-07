@@ -242,6 +242,21 @@ def trim_log(path, max_bytes=2_000_000, keep_bytes=500_000):
 # long enough. The phrase list below is only a backstop for the short clips
 # where VAD is least reliable.
 
+# ARCHITECTURE.md Section 8.3 lists beam size 3 to 5 as an experiment input and
+# requires a recorded comparison before any default changes. Measured on 51 of
+# Tejas's real recordings, same audio for each:
+#
+#     beam   raw WER   valid WER   numbers   ms/phrase
+#     1        19.6%       15.2%     66.7%         415
+#     3        17.3%       12.2%     70.8%         482
+#     5        18.5%       12.9%     70.8%         527
+#
+# Beam 3 is the point. Beam 5 is worse on word error AND slower, which is the
+# usual shape: a wider beam eventually starts preferring fluent continuations
+# over faithful ones. The 67 ms is spent where greedy decoding commits early
+# and gets a number wrong, and it sits well inside the 2.5 s latency budget.
+BEAM_SIZE = 3
+
 MIN_SPEECH_SECONDS = 0.35
 
 _HALLUCINATIONS = {
@@ -1072,7 +1087,8 @@ class Transcriber:
         """
         try:
             segs, _ = self.model.transcribe(
-                audio, language="en", beam_size=1, vad_filter=True,
+                audio, language="en", beam_size=BEAM_SIZE,
+                temperature=0.0, vad_filter=True,
                 condition_on_previous_text=False, initial_prompt=prompt)
             return " ".join(s.text.strip() for s in segs).strip()
         except Exception as e:
@@ -1082,6 +1098,7 @@ class Transcriber:
                           % type(e).__name__)
             self._to_cpu()
             segs, _ = self.model.transcribe(
-                audio, language="en", beam_size=1, vad_filter=True,
+                audio, language="en", beam_size=BEAM_SIZE,
+                temperature=0.0, vad_filter=True,
                 condition_on_previous_text=False, initial_prompt=prompt)
             return " ".join(s.text.strip() for s in segs).strip()

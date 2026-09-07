@@ -249,7 +249,8 @@ def run_model(name, records, prompt, terms, allow_download=False):
         t0 = time.time()
         try:
             segs, _info = model.transcribe(
-                audio, language="en", beam_size=1, vad_filter=True,
+                audio, language="en", beam_size=core.BEAM_SIZE,
+                temperature=0.0, vad_filter=True,
                 condition_on_previous_text=False, initial_prompt=prompt)
             raw = " ".join(s.text.strip() for s in segs).strip()
         except Exception as e:
@@ -263,7 +264,8 @@ def run_model(name, records, prompt, terms, allow_download=False):
             device, compute = "cpu", "int8"
             model = WhisperModel(name, device=device, compute_type=compute)
             segs, _info = model.transcribe(
-                audio, language="en", beam_size=1, vad_filter=True,
+                audio, language="en", beam_size=core.BEAM_SIZE,
+                temperature=0.0, vad_filter=True,
                 condition_on_previous_text=False, initial_prompt=prompt)
             raw = " ".join(s.text.strip() for s in segs).strip()
         seconds = time.time() - t0
