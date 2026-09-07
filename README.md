@@ -2,7 +2,7 @@
 
 **Offline speech-to-text for Windows. Runs on a 4 GB laptop GPU, types into any application, and never touches the network after the model downloads.**
 
-Press F9, talk, and the words appear where your cursor already is — in a browser, an IDE, a Word document, a Slack box. No quota, no subscription, no audio leaving the machine.
+Press F9, talk, and the words appear where your cursor already is, in a browser, an IDE, a Word document, a Slack box. No quota, no subscription, no audio leaving the machine.
 
 <!-- Replace with the demo link once recorded -->
 **Demo video:** _coming shortly_ · **Repository:** you are here · **Author:** [Tejas Hendre](https://www.tejashendre.com/)
@@ -11,16 +11,16 @@ Press F9, talk, and the words appear where your cursor already is — in a brows
 
 ## Why I built it
 
-I speak at about 120 words a minute and type at roughly half that. Closing that gap with dictation is a solved problem — I had been using a hosted tool happily and it worked well.
+I speak at about 120 words a minute and type at roughly half that. Closing that gap with dictation is a solved problem, I had been using a hosted tool happily and it worked well.
 
 What I wanted to know was **how hard the problem actually is**, and whether the specific constraint I had could be met at all:
 
 - **A 4 GB laptop GPU** already shared with a local LLM, so under 500 MB of VRAM to work with.
 - **No network**, because a lot of what I dictate is client and research material.
-- **Proper nouns that matter** — company names, foreign terms, and abbreviations that general models have no reason to know.
+- **Proper nouns that matter**, company names, foreign terms, and abbreviations that general models have no reason to know.
 - **Unmetered**, because a quota that interrupts you mid-thought costs more than the subscription does.
 
-That last set is a narrow constraint, not a market gap. Hosted tools optimise for accuracy, breadth and zero setup, and they are right to — those are what most people need. This project asks a different question: *what can you get if you refuse to send audio anywhere, and you only have 4 GB?*
+That last set is a narrow constraint, not a market gap. Hosted tools optimise for accuracy, breadth and zero setup, and they are right to, those are what most people need. This project asks a different question: *what can you get if you refuse to send audio anywhere, and you only have 4 GB?*
 
 The answer turned out to be: more than I expected, and the interesting part was never the transcription.
 
@@ -31,7 +31,7 @@ The answer turned out to be: more than I expected, and the interesting part was 
 ```
 mic ──▶ sounddevice ──▶ float32 buffer ──▶ Silero VAD ──▶ faster-whisper (small.en, CUDA int8_float16)
                                                 │                       │
-                                     pause detected (0.7s)      initial_prompt biasing
+                                   F9 release ends the phrase   initial_prompt biasing
                                                 │                       │
                                                 ▼                       ▼
                           corrections ──▶ near-miss snap ──▶ command grammar
@@ -43,11 +43,21 @@ mic ──▶ sounddevice ──▶ float32 buffer ──▶ Silero VAD ──�
 
 A general model has no reason to know how *Naukri* or *DEAMIE* is spelled. Fine-tuning for that is overkill, so accuracy is built in layers, each catching what the one above it misses:
 
-1. **`initial_prompt` biasing** — soft-biases decoding toward terms in `vocabulary.txt`, budgeted to 180 tokens so the prompt never crowds out the audio's own context.
-2. **Explicit correction rules** — deterministic `heard -> wanted` mappings for what biasing cannot reach, such as *guitar pre-po → GitHub repo*.
-3. **Near-miss snapping** — Levenshtein snapping at a strict 0.2 edit ratio with a 6-character floor, tuned so it never rewrites an ordinary English word.
+1. **`initial_prompt` biasing**, soft-biases decoding toward terms in `vocabulary.txt`, budgeted to 180 tokens so the prompt never crowds out the audio's own context.
+2. **Explicit correction rules**, deterministic `heard -> wanted` mappings for what biasing cannot reach, such as *guitar pre-po → GitHub repo*.
+3. **Near-miss snapping**, Levenshtein snapping at a strict 0.2 edit ratio with a 6-character floor, tuned so it never rewrites an ordinary English word.
 
-Layer 1 alone gets 86% of the test terms. All three get 100%, and the control corpus shows **zero** degradation — the accuracy gain costs nothing on ordinary speech.
+Layer 1 alone gets 86% of the test terms. All three get 100%, and the control corpus shows **zero** degradation, the accuracy gain costs nothing on ordinary speech.
+
+### One utterance, not one pause
+
+An earlier version emitted text as you paused, so words appeared while you were still talking. It never retyped or unsaid anything, which is the trap that kills streaming dictation, and it still turned out to be the wrong unit of work.
+
+A pause is not the end of a thought. Chunking on one splits a single intended sentence into several independent recognition and cleanup jobs, each of which loses the context the next one needed. Measured by replaying real recordings through both paths, utterances that got split were far worse than the same audio decoded whole, and utterances that happened not to get split were unaffected. Streaming was free right up until it fired.
+
+So the phrase is now the unit: F9 release ends it, and the whole thing is decoded once. Streaming is still there under `stream` in settings for anyone who wants live text and accepts the trade.
+
+If you already have a `settings.json` from an earlier version, this reaches you through a one-time migration that says on screen what it changed. It applies once, so turning streaming back on afterwards sticks. Changing a default does not reach anyone who already has a settings file, which is a quiet way to ship an improvement to nobody.
 
 ---
 
@@ -62,10 +72,14 @@ RTX 3050 Laptop, 4 GB VRAM. Every figure is produced by the offline test suite i
 | **CPU fallback** | **2.3–2.7× realtime** | Degrades automatically; never crashes the process |
 | **Vocabulary recall** | **50% → 100%** | 7/14 → 14/14 terms across the three layers |
 | **Control WER change** | **0.0%** | No regression on an 89-word ordinary-speech corpus |
-| **Latency to first word** | **~31% into the phrase** | Streaming mode, LocalAgreement-2 stable prefix |
+| **Latency to first word** | **~31% into the phrase** | Opt-in streaming mode only; whole-utterance is the default |
 | **Focus behaviour** | **`WS_EX_NOACTIVATE`** | The status pill never takes keyboard focus |
 
-Larger models were measured and rejected: `medium.en` ran 2.9× slower for +592 MB and got one term *worse*; `distil-medium.en` returned 92.6% WER and was unusable. Bigger was not better under this constraint.
+Larger models were measured rather than assumed. `distil-medium.en` returned a word error rate above 90% in both a synthetic and a real-voice test, which is a configuration fault rather than model quality, and it stays unused until somebody understands why.
+
+`medium.en` is the more interesting result, and the honest version of it is not "bigger was not better". On a real-voice corpus it is genuinely better on words, and the two models produce **identical** raw recall of protected names. It only *appears* to lose names after cleanup, because the `heard -> wanted` rules were mined from what `small.en` specifically gets wrong, so they do not match a model that makes different mistakes. It also costs roughly twice the decode time and twice the VRAM on this card.
+
+So `small.en` ships, not because it is the most accurate model available, but because it is the one whose correction layer has actually been measured. The upgrade path is to re-mine the rules against a new model, not to swap the model and hope.
 
 ---
 
@@ -73,17 +87,17 @@ Larger models were measured and rejected: `medium.en` ran 2.9× slower for +592 
 
 The transcription was the easy half. Everything below was found by using the tool daily and having it fail, and it is the part I would want to talk about:
 
-**The last mile is the product.** Getting text out of audio is a solved library call. Getting it into the *right* window, with the right capitalisation, without stealing focus, without clobbering the clipboard, and recovering when the user has moved on — that is where the actual work is. The status pill alone needed `WS_EX_NOACTIVATE` plus restoring the prior foreground window, because a window that takes focus types your words into itself.
+**The last mile is the product.** Getting text out of audio is a solved library call. Getting it into the *right* window, with the right capitalisation, without stealing focus, without clobbering the clipboard, and recovering when the user has moved on, that is where the actual work is. The status pill alone needed `WS_EX_NOACTIVATE` plus restoring the prior foreground window, because a window that takes focus types your words into itself.
 
-**Silence is not the absence of speech.** Half a second of near-silence produced a confident *"Thank you for watching."* — a YouTube artifact from the training data, which would have been typed into whatever was focused. Voice activity detection had to gate the output, not just trim it.
+**Silence is not the absence of speech.** Half a second of near-silence produced a confident *"Thank you for watching."*, a YouTube artifact from the training data, which would have been typed into whatever was focused. Voice activity detection had to gate the output, not just trim it.
 
-**Suspend destroys more than you think.** After a lid close, the hotkey silently stopped working. Fixing that revealed a second failure underneath: sleep also destroys the CUDA context, and touching the old model afterwards kills the process in native code with no Python traceback at all — `ucrtbase.dll`, `0xc0000409`. The model now rebuilds on wake, and the dead handle is deliberately leaked rather than freed, because freeing it is itself a call into the destroyed context.
+**Suspend destroys more than you think.** After a lid close, the hotkey silently stopped working. Fixing that revealed a second failure underneath: sleep also destroys the CUDA context, and touching the old model afterwards kills the process in native code with no Python traceback at all, `ucrtbase.dll`, `0xc0000409`. The model now rebuilds on wake, and the dead handle is deliberately leaked rather than freed, because freeing it is itself a call into the destroyed context.
 
 **A safety feature that fires wrongly is worse than none.** A noise gate added to ignore other voices in the room locked the author out of his own tool, because a test had written synthetic audio levels into the live settings file. It now self-disables after repeated rejections, refuses to write settings while testing, and shows on screen when it rejects something.
 
 **Quiet failures outlive loud ones.** The last audit found three faults that never crashed anything: one oversized line in the vocabulary file silently switched off *all* biasing; a malformed settings file killed startup before the log existed; and a recording nobody stopped grew unbounded at 64 KB/s. None had ever been reported, because nothing visibly broke.
 
-Every one of those became a test. There are 15 suites, and each exists because something failed first — which is why each is checked by reverting the fix and confirming the test fails.
+Every one of those became a test. There are 15 suites, and each exists because something failed first, which is why each is checked by reverting the fix and confirming the test fails.
 
 ---
 
@@ -95,7 +109,8 @@ Stated plainly, because a project page that only lists strengths is not worth re
 - **Windows only.** It depends on DWM, SendInput and Win32 focus behaviour throughout.
 - **NVIDIA GPU for full speed.** It runs on CPU at 2.3–2.7× realtime, which is usable but noticeably slower.
 - **Vocabulary is manual.** Terms come from a text file you maintain, or from mining your own notes. There is no learning loop.
-- **Single user, single machine.** No sync, no accounts, no telemetry — by design, but it means no cross-device continuity.
+- **No live text by default.** Words appear when you release F9, not while you talk. Streaming is available in settings, and the reason it is not the default is above.
+- **Single user, single machine.** No sync, no accounts, no telemetry, by design, but it means no cross-device continuity.
 
 ---
 
@@ -106,7 +121,7 @@ Stated plainly, because a project page that only lists strengths is not worth re
 | `full stop` / `comma` / `question mark` | Inserts the punctuation and capitalises what follows |
 | `new line` / `new paragraph` | `\n` / `\n\n` |
 | `scratch that` | Erases the last phrase typed (capped, so a mishearing cannot run away) |
-| `cap that` | Capitalises the previous word — *naukri cap that* → `NAUKRI` |
+| `cap that` | Capitalises the previous word, *naukri cap that* → `NAUKRI` |
 | `literally <word>` | Types the word instead of executing it as a command |
 
 ---
@@ -124,17 +139,17 @@ python install.py
 
 Then launch **Local Dictation** from the Start Menu, or run `Dictate.cmd`. Press **F9** anywhere to start and stop. Settings are on the tray icon.
 
-Run `Run-Tests.cmd` to reproduce every number in the table above. The first run generates its speech corpus locally with the Windows SAPI voices, so the whole suite is offline.
+Run `Run-Tests.cmd` to reproduce every number in the table above. It discovers and runs all 20 suites in `tests/`. The first run generates its speech corpus locally with the Windows SAPI voices, so the whole suite is offline.
 
 `ARCHITECTURE.md` has the full design record: what was measured, what was tried and rejected, and what each failure taught.
 
-[`BUILD_LOG.md`](BUILD_LOG.md) has something rarer: what it cost. This was built in 29 hours by dictating at it, and that page publishes the token accounting, the ratio of instruction to output, and the six failures that shaped the design — including the three that never crashed anything and so were never reported.
+[`BUILD_LOG.md`](BUILD_LOG.md) has something rarer: what it cost. This was built in 29 hours by dictating at it, and that page publishes the token accounting, the ratio of instruction to output, and the six failures that shaped the design, including the three that never crashed anything and so were never reported.
 
 ---
 
 ## Who built this
 
-**Tejas Hendre** — Mumbai. I work on customer and commercial problems: diagnosing what is actually wrong, designing something that addresses it, and proving it works in front of the people who have to believe it. Previously partner consulting at Zalando and research operations at PitchBook; MSc from ESCP Business School.
+**Tejas Hendre**, Mumbai. I work on customer and commercial problems: diagnosing what is actually wrong, designing something that addresses it, and proving it works in front of the people who have to believe it. Previously partner consulting at Zalando and research operations at PitchBook; MSc from ESCP Business School.
 
 This is one of several things I have built to stay close to the systems I talk about. If you are building something a customer has to *see* working before they will believe it, that is the work I want to be doing.
 

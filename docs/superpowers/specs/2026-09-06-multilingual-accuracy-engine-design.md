@@ -1,6 +1,6 @@
 # Dictate Local v2: Multilingual Accuracy Engine
 
-**Status:** Proposed architecture for review
+**Status:** Superseded research. Do not implement this document. `ARCHITECTURE.md` is the final English-first Option 2 design.
 
 **Date:** 6 September 2026
 

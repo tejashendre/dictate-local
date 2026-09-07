@@ -1,512 +1,870 @@
-# Local Dictation — Architecture
+# Dictate Local: Final Architecture
 
-**A permanently local, unmetered speech-to-text system. The goal is not to imitate anything; it is to remove the limit, the subscription and the network round trip while keeping the part that actually matters: text appearing where the cursor is, fast enough that you stop noticing the tool.**
+**Status:** Final implementation design for user review. The code does not yet implement it.
 
-**Status: v1 built, measured, and confirmed working on a real voice, 31 August 2026. Steps 1 to 4 plus the always-on-top pill are done and covered by six test suites. Run `Run-Tests.cmd` to reproduce every number in this document.**
+**Decision:** Build Option 2, the lean hybrid finalizer.
 
----
+**Product boundary:** One user, one Windows laptop, English-first dictation, permanently local after model installation, no subscription, no usage quota, and no required server.
 
-## 1. Why build this at all
+**Authority:** This file is the implementation source of truth. It supersedes the earlier v1 architecture narrative and the broad multilingual proposal in `docs/superpowers/specs/2026-09-06-multilingual-accuracy-engine-design.md`. Git history remains the record of how v1 was built.
 
-| The constraint | What running locally gives me |
+## 1. Final product promise
+
+Press F9, speak naturally for as long as needed, press F9 again, and receive one accurate, polished result in the application where dictation started.
+
+The product should feel invisible during daily use:
+
+- no account;
+- no cloud transcription;
+- no quota;
+- no audio stored on disk;
+- no speculative text that later changes;
+- no need to speak punctuation commands for ordinary prose;
+- no repeated correction of the same personal term;
+- no complex control panel;
+- no lost transcript when another component fails.
+
+"Flawless" is a product goal, not a truthful guarantee. For this project it means that at least 95 percent of ordinary daily utterances are accepted without a manual edit after personalization, protected facts are never changed by the formatter, and silence never produces inserted text.
+
+## 2. Why Option 2 is the final choice
+
+Three possible directions were considered:
+
+1. Keep the current streaming and rule-based pipeline. This is fast, but real speech is fragmented at thinking pauses and the cleanup rules can make the completed sentence less accurate.
+2. Use one strong whole-utterance ASR pass, deterministic personal corrections, one optional local semantic formatter, and a strict validator. This maximizes final-text accuracy while keeping the product local and small.
+3. Build a large multilingual ensemble with several ASR models, span-level language routing, extensive context collection, and multiple specialist services. This is technically interesting but too large for the immediate English dictation goal and the 4 GB GPU constraint.
+
+Option 2 is selected because it addresses the measured failure, not an imagined feature gap. The user values correct completed English more than seeing unstable text while still speaking.
+
+## 3. Current evidence and the problem being fixed
+
+The existing application already proves the difficult desktop foundations:
+
+- global F9 toggle;
+- in-memory microphone capture;
+- CUDA inference with CPU fallback;
+- Silero voice activity detection;
+- personal vocabulary biasing and deterministic `heard -> wanted` rules;
+- spoken commands;
+- tray, non-focus-stealing status pill, settings, and startup shortcut;
+- duplicate-instance protection;
+- sleep and GPU recovery handling;
+- synthetic regression suites and a private real-voice evaluation harness.
+
+Those parts should be retained unless a failing test proves they must change.
+
+The latest private real-voice result is the baseline, not a public release claim. Its exact values remain in the gitignored `eval/private/results/` directory and can be reproduced locally with:
+
+```text
+python eval/bench_real.py --models small.en
+```
+
+The tracked repository must not quote private-corpus accuracy values that a public reviewer cannot reproduce. The aggregate and category evidence nevertheless identifies the architectural fault:
+
+- fillers are handled well;
+- ordinary speech is usable but not correction-free;
+- false starts and self-corrections are made materially worse by the current cleanup;
+- URLs, dates, numbers, and technical language remain weak;
+- the current final cleanup is worse than the raw transcript overall in the private evaluation;
+- pause-finalized streaming splits one intended sentence into several independent recognition and cleanup jobs.
+
+Therefore v2 is not a cosmetic upgrade. It changes the unit of reasoning from each pause to the complete utterance.
+
+## 4. Final top-level architecture
+
+```text
+F9 hotkey
+   |
+   v
+Session controller captures target window and starts microphone
+   |
+   v
+In-memory audio buffer
+   |
+   v
+One VAD and background-speech safety gate
+   |
+   v
+Whole-utterance ASR using the locally benchmarked model
+   |
+   v
+Raw transcript, timing, and confidence evidence
+   |
+   v
+Deterministic normalization and personal corrections
+   |
+   v
+Protected-span masker
+   |
+   v
+Optional local semantic formatter
+   |
+   v
+Deterministic safety validator
+   |                    |
+   | accepted           | rejected, timed out, or unavailable
+   v                    v
+Validated result     Deterministic fallback
+   |                    |
+   +---------+----------+
+             |
+             v
+Single insertion into the original target
+             |
+             v
+Recovery record and explicit correction learning
+```
+
+There is no required network edge in this runtime graph. Downloads during installation are the only network requirement.
+
+## 5. Non-negotiable design decisions
+
+### 5.1 Whole utterance is the default accuracy unit
+
+F9 release, not a thinking pause, ends the utterance. Internal pauses remain part of the same audio and language context.
+
+Silero VAD may:
+
+- reject a recording with no valid near-field speech;
+- trim leading and trailing silence;
+- calculate speech duration and quality warnings.
+
+Silero VAD must not divide ordinary dictation into independently formatted phrases. The old streaming path remains temporarily available as an advanced experimental mode until v2 passes acceptance, but the shipped default is `stream = false`.
+
+### 5.2 Text is inserted once
+
+No partial hypothesis is typed into the target application. No background worker backspaces over text the user may have edited. The status pill may show activity, but target text appears only when the final result is accepted.
+
+### 5.3 The acoustic transcript remains authoritative
+
+The formatter is an editor, not an author. It may:
+
+- add punctuation and capitalization;
+- remove recognized filler words;
+- collapse accidental immediate repetitions;
+- resolve an explicit self-correction or abandoned start;
+- apply a small application style profile.
+
+It may not:
+
+- invent a fact;
+- answer the dictated text;
+- summarize it;
+- translate it;
+- change sentiment, tense, negation, names, numbers, dates, money, addresses, URLs, email addresses, or identifiers;
+- remove uncertain content merely to make the sentence sound smoother.
+
+### 5.4 Personalization is explicit and reversible
+
+The application learns only when the user chooses `Correct last dictation`. It never assumes that subsequent keyboard editing was a correction, and it never reads arbitrary document history to infer one.
+
+Every learned rule has a source, date, scope, use count, enabled state, and delete action.
+
+### 5.5 Accuracy decisions come from the real voice corpus
+
+No model becomes the production default because it is newer, larger, or popular. It must beat the existing model on the same valid local recordings while satisfying latency and memory limits.
+
+### 5.6 One laptop, no infrastructure
+
+Oracle Free Tier, a website, a remote API, accounts, databases, queues, telemetry services, and cloud LLMs are outside the architecture. They add failure paths without helping home dictation accuracy.
+
+## 6. Runtime session design
+
+Each press-to-press dictation is one immutable session with a unique identifier.
+
+```text
+IDLE
+  -> LISTENING
+  -> FINALIZING_AUDIO
+  -> TRANSCRIBING
+  -> NORMALIZING
+  -> FORMATTING
+  -> VALIDATING
+  -> INSERTING
+  -> COMPLETE
+
+Any processing state may move to RECOVERABLE_ERROR.
+LISTENING may move to CANCELLED.
+No completed state may return to an earlier state.
+```
+
+At session start the controller records:
+
+- session identifier;
+- monotonic start time;
+- foreground window handle and a short diagnostic title;
+- selected microphone identifier;
+- active application category;
+- current settings snapshot.
+
+Audio remains a 16 kHz mono float32 buffer in memory. The callback performs no model work and no disk write. The existing five-minute hard limit remains. If the limit is reached, the normal finalization path runs so completed speech is not discarded.
+
+A worker result may insert text only when its session identifier still matches the active completed session. This prevents a delayed worker from inserting into a later dictation.
+
+## 7. Audio safety gate
+
+Run voice analysis once and reuse the result. The gate returns:
+
+```python
+AudioEvidence(
+    has_speech: bool,
+    speech_seconds: float,
+    trailing_silence_seconds: float,
+    rms: float,
+    near_field_likelihood: float | None,
+    clipped_fraction: float,
+    warnings: tuple[str, ...],
+)
+```
+
+Required behavior:
+
+1. No speech means no ASR call and no inserted text.
+2. Very short low-energy clips are rejected before Whisper can invent subtitle-like text.
+3. The learned noise gate may reject distant television or room speech only when calibration is valid.
+4. If the learned gate rejects several consecutive clear recordings, it disables itself and reports the problem rather than silently making the app unusable.
+5. VAD failure is visible in diagnostics. It must not silently claim a clean result.
+6. Silence and noise tests must exercise the same function used by F9.
+
+The current four silence recordings are insufficient for release. The corpus must contain at least 50 varied silence and household-noise clips before the zero-false-insertion gate can be trusted.
+
+## 8. Recognition engine
+
+### 8.1 Interface
+
+The rest of the application sees one replaceable interface:
+
+```python
+RecognitionResult(
+    text: str,
+    language: str,
+    segments: tuple[Segment, ...],
+    average_log_probability: float | None,
+    no_speech_probability: float | None,
+    compression_ratio: float | None,
+    model_name: str,
+    device: str,
+    compute_type: str,
+    elapsed_seconds: float,
+)
+
+recognize(audio: np.ndarray, prompt: str | None) -> RecognitionResult
+```
+
+Recognition performs no cleanup, command execution, formatting, or typing.
+
+### 8.2 Model selection
+
+The existing private evaluation harness is the selection authority. Benchmark these already defined candidates sequentially on the same corpus:
+
+- `small.en`, the production baseline;
+- `distil-large-v3`;
+- `large-v3-turbo`.
+
+Do not download a model without explicit user approval. Do not change `settings.json` during a benchmark.
+
+Selection order:
+
+1. Eliminate a model if it does not fit with at least 600 MB of GPU headroom.
+2. Eliminate it if any protected category materially regresses.
+3. Eliminate it if post-stop latency exceeds the release budget.
+4. Among the remaining models, choose the lowest real-voice raw WER.
+5. Break a near tie using exact-utterance rate, protected-field accuracy, and resource use.
+
+A larger model is not automatically selected. The old synthetic benchmark could not reveal an improvement because `small.en` already scored perfectly on that easy corpus. The private natural corpus is now mandatory.
+
+### 8.3 Decode policy
+
+The production path uses one high-quality deterministic decode. Initial values to test are:
+
+- language fixed to English for the English profile;
+- temperature `0`;
+- beam size between `3` and `5`;
+- condition on previous text disabled between independent F9 sessions;
+- personal vocabulary prompt kept within the existing token budget;
+- word timestamps enabled only if needed by confidence or correction logic.
+
+These are experiment inputs, not claims of optimal values. Claude must record a comparison before changing a default.
+
+An uncertainty-triggered retry may use the same resident model with a broader beam. A second resident ASR model is not part of the normal runtime. The retry is allowed only when confidence is poor, output is empty despite valid speech, or protected content appears malformed.
+
+### 8.4 Resource behavior
+
+The GPU path is warmed at startup. If CUDA initialization, inference, or post-sleep recovery fails, the application retries once on CPU and clearly shows degraded mode.
+
+ASR and the local formatter must not independently assume all GPU memory is available. The resource coordinator chooses one of these measured configurations:
+
+- ASR on GPU and formatter on CPU;
+- sequential GPU residency if unload and reload latency remains acceptable;
+- rules-only fallback when neither arrangement meets the latency budget.
+
+Running two large models concurrently on a 4 GB GPU is prohibited.
+
+## 9. Deterministic accuracy layer
+
+This layer runs before any local LLM and remains a complete fallback product.
+
+Order is fixed:
+
+1. Unicode and whitespace normalization.
+2. Exact `heard -> wanted` corrections.
+3. Conservative vocabulary snapping.
+4. Address, URL, email, and identifier joining.
+5. Unambiguous standalone spoken commands.
+6. Filler tagging, not deletion yet.
+7. Protected-span detection.
+
+Exact correction rules beat fuzzy rules. Fuzzy snapping must retain the existing collision tests and must never rewrite an ordinary word merely because it resembles a personal term.
+
+Self-correction logic must see the whole utterance. It must not delete a clause based only on the presence of words such as `actually`, `sorry`, `no`, or `I mean`. These words are markers only when the surrounding structure provides evidence of a replacement.
+
+## 10. Protected spans
+
+Protected spans are extracted after personal correction and before semantic formatting.
+
+Protected categories:
+
+- personal and company names in the local lexicon;
+- all numbers and numeric ranges;
+- currency values and percentages;
+- dates and times;
+- negations;
+- postal addresses;
+- URLs and email addresses;
+- filenames, paths, command fragments, code identifiers, and abbreviations.
+
+Each span is replaced with an opaque placeholder before formatter inference:
+
+```text
+Raw:      Send EUR 1,250 to Tejas by 14 September.
+Masked:   Send <P0> to <P1> by <P2>.
+Required: <P0>, <P1>, and <P2> each occur once and in the same order.
+```
+
+The placeholder map exists only for the current session. Restoration is deterministic. If any placeholder is missing, duplicated, reordered in a meaning-changing way, or modified, formatter output is rejected.
+
+Protection prevents a text model from changing correctly recognized facts. It cannot repair a number the ASR heard incorrectly. Recognition accuracy for those categories must therefore remain a separate release metric.
+
+## 11. Local semantic formatter
+
+### 11.1 Role
+
+Use one local text model through the existing loopback-only formatter adapter. The model is optional at runtime but is part of the selected Smart experience when it passes evaluation.
+
+It receives only:
+
+- the masked transcript;
+- a fixed editing instruction;
+- the active application category;
+- a small set of retrieved correction examples;
+- an explicit output schema.
+
+It does not receive screenshots, unrelated windows, full documents, browser history, Career Center files, or remote context.
+
+### 11.2 Allowed operation
+
+The formatter performs one task:
+
+> Convert this spoken transcript into faithful written English. Preserve meaning and every placeholder. Remove only clear fillers and abandoned starts. Resolve only explicit self-corrections. Return the edited text and no answer or commentary.
+
+Use temperature `0` and a strict timeout. Prefer structured JSON if the chosen local runtime returns it reliably:
+
+```json
+{
+  "text": "the edited text",
+  "operations": ["punctuation", "explicit_self_correction"]
+}
+```
+
+### 11.3 Routing
+
+The formatter is disabled for:
+
+- secure fields;
+- terminals and command prompts;
+- utterances dominated by paths, URLs, email addresses, or code;
+- very short command-like text;
+- an unavailable or unhealthy local model;
+- resource contention that would exceed the latency budget.
+
+Those cases use deterministic output.
+
+### 11.4 Failure behavior
+
+The formatter can never cause loss of dictation. Timeout, malformed output, model unavailability, excessive length change, placeholder damage, or failed validation returns the deterministic candidate immediately.
+
+No remote LLM fallback is permitted.
+
+## 12. Safety validator
+
+The validator compares four artifacts:
+
+1. raw ASR transcript;
+2. deterministic candidate;
+3. protected-span map;
+4. formatter candidate.
+
+The formatter candidate is accepted only if all checks pass:
+
+- output is valid and contains only the requested result;
+- every placeholder occurs exactly once;
+- all protected values restore exactly;
+- negation count and identity are preserved;
+- no new proper noun, number, URL, email, or code token appears;
+- length remains inside the category-specific envelope;
+- content-word additions are zero unless they come from an approved correction rule;
+- deletions are explainable as tagged fillers, exact repetitions, or an explicit abandoned clause;
+- normalized edit distance remains below the measured safety threshold;
+- the output does not resemble an answer, refusal, heading, or model commentary.
+
+Validation is deterministic and locally testable. It does not ask a second LLM whether the first LLM was safe.
+
+The fallback hierarchy is:
+
+```text
+validated formatter result
+    else deterministic corrected result
+        else raw ASR transcript
+            else recoverable error with no insertion
+```
+
+## 13. Application-aware formatting without surveillance
+
+Only the foreground executable and focused control type are required. Classify the target into a small fixed set:
+
+- `chat`;
+- `email`;
+- `document`;
+- `search`;
+- `code_or_terminal`;
+- `unknown`;
+- `secure`.
+
+The category changes punctuation and formatting conservatively:
+
+| Category | Behavior |
 |---|---|
-| A quota that interrupts a train of thought | **No cap. The limit is the GPU, not a plan tier** |
-| A recurring cost for commodity inference | Zero, permanently |
-| Audio leaving the machine | **Nothing leaves.** This is the one that decided it — a lot of what I dictate is client and research material |
-| No way to fix it when it breaks | I own the failure, and every fix in this document is one I could make |
-| A general model has no reason to know my proper nouns | **Bias decoding toward my own words**: Naukri, ESCP, Zalando, PitchBook, Arbeitszeugnis, candidature spontanée |
+| Chat | Natural punctuation, contractions allowed, no formal rewriting |
+| Email | Complete sentences and paragraph breaks when spoken |
+| Document | Standard prose punctuation |
+| Search | Minimal punctuation and no filler expansion |
+| Code or terminal | Verbatim deterministic mode, no semantic formatter |
+| Unknown | Document defaults with no surrounding-context collection |
+| Secure | Do not insert and do not retain transcript text |
 
-**The honest counterpoint, and it is a real one:** a mature hosted product has done work on formatting, punctuation restoration, per-application behaviour and breadth of language that a two-day build does not match and is not trying to. This is a narrow tool built for one machine and one voice. **That narrowness is the whole design, not a shortcoming of it.**
+Version 2 does not read surrounding document text. That can be reconsidered only after the core no-edit target is met and a specific measured failure requires it.
 
----
+## 14. Insertion and recovery
 
-## 2. Current state, v1
+The insertion broker owns all interaction with the target application.
 
+Required sequence:
+
+1. Save the final text to the bounded local recovery record.
+2. Confirm that the original window still exists.
+3. Restore focus to it without activating the status pill.
+4. Insert the text once using the safest available Windows method.
+5. Confirm that the insertion command was issued.
+6. Mark the recovery record complete.
+
+Use direct keyboard typing for simple ASCII fields only when verified. Use a clipboard-preserving paste path for Unicode or applications where simulated typing loses characters. The user's previous clipboard contents must be restored after insertion.
+
+If the original target cannot be restored, do not type into whichever window happens to be focused. Copy the final result to the clipboard, show `Target lost - text copied`, and keep it in recovery history.
+
+Store no audio. Keep a bounded local history of raw and final text only for recovery and correction learning. The normal settings UI must offer `Clear history` and a way to disable transcript history while retaining the last recoverable item in memory.
+
+## 15. Correction learning: the differentiating loop
+
+The product goal is not merely lower first-pass WER. It is that the same personal mistake should not require the same correction again.
+
+### 15.1 User flow
+
+1. The last dictation is inserted.
+2. If it is wrong, the user chooses `Correct last dictation` from the tray or its configurable hotkey.
+3. A small window shows the raw transcript and an editable final result.
+4. The user enters the intended text and selects `Apply and learn`.
+5. The app replaces the last insertion only when the original target and text position can be verified. Otherwise it copies the corrected text and explains why automatic replacement was unsafe.
+6. The app proposes any reusable mapping it inferred. The mapping is enabled only after explicit confirmation.
+
+### 15.2 Stored correction
+
+Use a versioned local JSON file, written atomically:
+
+```json
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "local-id",
+      "heard": "flow code",
+      "wanted": "Claude Code",
+      "scope": "global",
+      "source": "explicit_user_correction",
+      "created_at": "local ISO timestamp",
+      "use_count": 0,
+      "enabled": true
+    }
+  ]
+}
 ```
-mic ──▶ sounddevice ──▶ float32 buffer ──▶ Silero VAD ──▶ faster-whisper (small.en)
-                                                │                    │
-                                    pause detected?          initial_prompt
-                                                │                    │
-                                                ▼                    ▼
-                          corrections ──▶ near-miss snap ──▶ command grammar
-                                                                     │
-                                              keyboard.write() ──▶ focused window
-                                                                     │
-                                                              transcript.log
+
+Global mappings are limited to bounded word or phrase substitutions. Long sentence rewrites are stored as local examples for formatter retrieval, not applied as global search-and-replace rules.
+
+The correction screen must support disable, edit, and delete. A correction that causes a regression can therefore be removed without editing source files.
+
+### 15.3 Retrieval
+
+Before formatting, retrieve at most three relevant user-approved examples using deterministic token overlap. No vector database and no embedding service are needed. If no example is clearly relevant, send none.
+
+## 16. Minimal user interface
+
+The tray icon is the application. Left-click opens Settings. Right-click exposes:
+
+- Start or stop dictation;
+- Correct last dictation;
+- Personal words and corrections;
+- Settings;
+- Quit.
+
+The pill appears only during active work and never takes keyboard focus:
+
+```text
+Listening -> Processing -> Inserted
+                    \-> Needs attention
 ```
 
-| Component | Choice | Why |
+Normal settings contain only:
+
+1. Hotkey.
+2. Microphone.
+3. Writing style: Exact, Clean, or Smart.
+4. Personal words and corrections.
+5. Start with Windows.
+6. Clear local history.
+
+Advanced settings contain model, device, VAD, diagnostics, and the legacy streaming experiment. Pause timing must disappear from normal settings because pause chunking is no longer the default product.
+
+First launch opens Settings once and explains F9 in one sentence. Later launches remain silent in the tray.
+
+## 17. Configuration defaults
+
+The final default behavior is:
+
+```json
+{
+  "hotkey": "f9",
+  "language": "en",
+  "quality": "accurate",
+  "model": "small.en",
+  "device": "auto",
+  "stream": false,
+  "writing_style": "smart",
+  "formatter": "local",
+  "vocab": true,
+  "fuzzy": true,
+  "commands": true,
+  "noise_gate": true,
+  "overlay": true,
+  "run_at_login": false
+}
+```
+
+Production remains on `small.en` until the same-corpus benchmark proves that another concrete model is better and still meets the resource and latency gates.
+
+Environment variables may remain for tests and diagnostics, but ordinary users should never need them.
+
+## 18. Lean internal module boundaries
+
+Avoid a framework rewrite. Keep the working desktop shell and add only two focused modules.
+
+| File | Final responsibility |
+|---|---|
+| `dictate.py` | Composition root, hotkey loop, microphone lifecycle, session state, UI events |
+| `dictate_core.py` | VAD evidence, ASR adapter, vocabulary, deterministic corrections, GPU fallback |
+| `dictate_finalizer.py` | Protected spans, local formatter routing, validation, fallback selection |
+| `dictate_learning.py` | Correction storage, rule proposal, retrieval, and correction-session data |
+| `dictate_polish.py` | Small deterministic cleanup functions and loopback local-model client |
+| `dictate_stream.py` | Legacy experimental streaming only, disabled by default |
+| `dictate_config.py` | Versioned settings schema and migration |
+| `dictate_settings.py` | Minimal settings and correction-management windows |
+| `dictate_tray.py` | Discoverable tray actions |
+| `dictate_overlay.py` | Non-focus-stealing status only |
+| `eval/` | Private real-voice recording, scoring, and model comparison |
+| `tests/` | Deterministic unit, integration, and regression coverage |
+
+Do not create service containers, repositories, event buses, plugin systems, web dashboards, or databases for this version.
+
+## 19. Data boundaries
+
+| Data | Storage | Retention |
 |---|---|---|
-| Capture | `sounddevice`, 16 kHz mono float32 | Whisper's native rate. No resampling |
-| Model | `faster-whisper` `small.en`, int8_float16 | Roughly 500 MB. Fits 4 GB VRAM with headroom |
-| Trigger | `keyboard`, F9 toggle | **Toggle, not push-to-hold.** Holding a key while speaking quickly is the wrong interaction |
-| VAD | Silero, bundled with faster-whisper | ~11 ms per pass. No extra download, no network |
-| Output | `keyboard.write()` | Types into any focused window. No clipboard, so nothing is clobbered |
-| Indicator | tkinter pill, `WS_EX_NOACTIVATE` | Always in front, **never takes keyboard focus** |
-| Log | append-only `transcript.log` | Nothing spoken is ever lost |
+| Audio | Memory only | Destroyed after the session |
+| Settings | `settings.json` | Until changed or reset |
+| Manual vocabulary | `vocabulary.txt` | Until user edits it |
+| Learned corrections | `corrections.json` | Until disabled, deleted, or reset |
+| Recovery text | bounded local JSONL | Configurable, capped by count and bytes |
+| Diagnostic events | rotating local log | Capped |
+| Private evaluation audio | `eval/private/` | User-controlled and gitignored |
+| Nearby document context | Not collected in v2 | None |
 
-**Code layout.** `dictate.py` owns the microphone, the hotkey and the keyboard. `dictate_core.py` and `dictate_stream.py` own everything else, and deliberately contain no audio or keyboard code — which is why the whole of the vocabulary, command and fallback behaviour can be tested headlessly.
+Secrets, private Career Center material, recordings, transcripts, model caches, settings, and evaluation output must remain untracked. `.gitignore` is an acceptance requirement, not documentation advice.
 
-### The correction that mattered most
+## 20. Failure policy
 
-**The v0 note in this document claimed the GPU path was verified. It was not.** `cublas64_12.dll` was absent machine-wide: no CUDA toolkit, no NVIDIA pip packages. `WhisperModel(...)` constructed happily on CUDA and the process only fell over later, inside `transcribe()`, when the encoder first touched cuBLAS — so v0's `try/except` around the constructor caught nothing and the tool exited on first use.
-
-Two fixes, both in the code now:
-
-- `nvidia-cublas-cu12` installed, and its directory pushed onto `PATH` **before** `faster_whisper` is imported. `os.add_dll_directory` is not enough; ctranslate2 loads the DLL with a plain `LoadLibrary`, which searches `PATH`.
-- A **warmup transcribe at startup**, so a broken GPU path fails in the first two seconds instead of on the first thing you dictate.
-
-**Measured after the fix:** 2.5 s warm start, **11–16× realtime** on GPU, 433 MB VRAM. CPU fallback runs at **2.3–2.7× realtime**.
-
----
-
-## 3. What v1 added, and what it measured
-
-Every number below comes from `Run-Tests.cmd`. The test corpus is generated locally with the Windows SAPI voices at a calibrated **141 WPM**, inside the measured 120–147 band. **Synthetic speech is a regression signal, not an accuracy guarantee** — the final check is always a real voice.
-
-### 3.1 Custom vocabulary — done
-
-Terms live in `vocabulary.txt`, one per line, and are fed to Whisper as an `initial_prompt`. **This was the highest value per line of code, as predicted.**
-
-| | Terms correct |
+| Failure | Required result |
 |---|---|
-| No prompt | 7/14 — **50%** |
-| `initial_prompt` | 12/14 — **86%** |
-| Prompt + corrections + snapping | **14/14 — 100%** |
+| No speech or room noise | Insert nothing and return to idle |
+| GPU unavailable | Retry ASR once on CPU and show degraded status |
+| ASR fails on both devices | Preserve no partial guess, show recoverable error |
+| Formatter unavailable or slow | Use deterministic candidate immediately |
+| Formatter changes protected content | Reject it and use deterministic candidate |
+| Target window disappears | Copy final text, never type into another window |
+| Clipboard insertion fails | Restore clipboard and retain recovery item |
+| Correction file is malformed | Quarantine it, load no learned rules, keep dictation working |
+| Settings file is malformed | Load safe defaults and report the reset |
+| App starts twice | Refuse the second instance visibly |
+| Laptop resumes from sleep | Rebuild unsafe audio and CUDA resources before accepting F9 |
 
-**Control WER stayed at 0.0% throughout**, which is the number that actually mattered: a prompt that fixes proper nouns but degrades ordinary speech would be a bad trade.
+No optional feature may take down basic transcription.
 
-Three layers, because one was not enough:
+## 21. Evaluation and release gates
 
-1. **`initial_prompt`** biases decoding. Soft, and it does most of the work.
-2. **Near-miss snapping** catches what biasing misses. Streaming proved this was necessary: the same word came out `Arbeitsugnis` in one chunking and `Arbeitsuegnis` in another, and no hand-written list of variants converges on a German compound noun.
-3. **Explicit `heard -> wanted` rules**, for what neither of the above can reach — mainly terms too short for snapping, like `Deami -> DEAMIE`.
+### 21.1 Three separate accuracy layers
 
-**Snapping is the part that could do real damage**, since silently rewriting an ordinary English word into a proper noun is worse than leaving one term misspelt. The guard is an edit-distance ratio of 0.2. The worked example: `linked` is two edits from `LinkedIn`, which is 0.25 — at 0.25 the sentence "I linked the file" becomes "I LinkedIn the file"; at 0.2 it does not. **Measured against an 89-word collision corpus: zero rewrites.**
+Always report:
 
-### 3.2 Spoken punctuation and commands — done
+- raw WER against literal speech;
+- deterministic-corrected WER against literal speech;
+- final WER against intended written text.
 
-**The probe that shaped this: Whisper already converts a spoken "comma" by itself.** `"Add milk comma eggs comma and bread"` transcribes as `"Add milk, eggs, and bread"`. So **`comma` is deliberately not a command** — implementing it would buy nothing and would start mangling "the comma in that sentence". What Whisper does *not* convert, and what is therefore worth handling:
+Never hide a weak recognizer behind cleanup. Never claim improvement from a single aggregate when a protected category regressed.
 
-| Spoken | Effect |
+### 21.2 Required corpus
+
+The private real-voice corpus must include:
+
+- ordinary messages;
+- fast speech;
+- long natural thoughts;
+- names and companies;
+- dates and times;
+- numbers and money;
+- URLs and email addresses;
+- technical language;
+- fillers;
+- false starts;
+- explicit self-corrections;
+- quiet speech;
+- fan noise;
+- distant television or room voices;
+- at least 50 silence and household-noise clips.
+
+Synthetic Windows voices remain regression fixtures only.
+
+### 21.3 Pre-release gates
+
+All gates are measured on Tejas's laptop and voice:
+
+| Gate | Required result |
+|---|---:|
+| Silence or household noise inserted as text | 0 cases |
+| Final WER compared with raw WER | Final must be lower, never higher overall |
+| Ordinary-speech raw WER | 10% or lower |
+| Final WER | 8% or lower |
+| Exact final utterances in the balanced corpus | 80% or higher |
+| Protected names | 95% or higher |
+| Protected numbers, dates, and money | 95% or higher |
+| Formatter protected-span mutations | 0 in the full corpus |
+| False-start and self-correction final WER | 15% or lower in each category |
+| GPU post-stop latency for an utterance up to 15 seconds | p95 at or below 2.5 seconds |
+| Target-window insertion failures | 0 in 100 automated focus-change trials |
+| Existing regression suites | 100% passing |
+
+These are release gates, not current claims. If the model cannot reach them on this hardware, report the gap and keep the safest best-performing configuration. Do not manipulate the corpus or expected text to create a pass.
+
+### 21.4 Daily-use acceptance
+
+After laboratory gates pass, use the application for at least seven real days and at least 200 non-trivial utterances.
+
+Track locally:
+
+- utterances accepted without correction;
+- corrected characters per 100 dictated characters;
+- repeated errors after an approved correction;
+- median and p95 post-stop latency;
+- formatter rejection and timeout rate;
+- target-loss recovery events.
+
+Final product acceptance requires:
+
+- at least 95% of eligible utterances accepted without editing;
+- no protected-fact corruption;
+- no recurrence of an exact approved correction in its valid scope;
+- no lost transcript;
+- user preference for Dictate Local over returning to manual typing during the trial.
+
+## 22. Test additions
+
+Keep all existing regression coverage. Add focused suites:
+
+| Test file | Proof required |
 |---|---|
-| `full stop` | `.` and capitalise the next word |
-| `new line` | one line break |
-| `new paragraph` | two line breaks |
-| `question mark` / `exclamation mark` | `?` / `!` |
-| `scratch that` | Discard the last thing typed |
-| `cap that` | Capitalise the previous word |
-| `literally <word>` | Escape hatch, type the word instead of running it |
+| `tests/test_whole_utterance.py` | Thinking pauses never cause intermediate insertion |
+| `tests/test_finalizer.py` | Formatter routing and fallback order are exact |
+| `tests/test_protected.py` | Names, numbers, dates, negations, addresses, URLs, and identifiers round-trip unchanged |
+| `tests/test_validator.py` | Hallucination, answer-like output, placeholder damage, and unsafe deletion are rejected |
+| `tests/test_learning.py` | Only approved corrections are stored, scoped, retrieved, disabled, and deleted |
+| `tests/test_recovery.py` | Target loss and insertion failure preserve the final text safely |
+| `tests/test_quality_gate.py` | Aggregate and category regressions fail the release check |
 
-**The hard part is that the command use and the ordinary use are the same words.** "I finished the report full stop send it" and "the car came to a full stop at the light" are identical to a text matcher. The discriminator that works is **the determiner in front**: nobody dictating punctuation says "a full stop", and everybody using it as a noun does. A following "of" is the second guard, for "a new line of work".
+Tests must call the same public functions used by the F9 path. A unit test for an unused helper is not runtime proof.
 
-All six ambiguous phrasings in the test suite stay quiet. All eight command phrasings fire.
+## 23. Implementation sequence
 
-### 3.3 GPU contention — done
+Each phase must leave the current app usable and must be independently reviewable.
 
-**The trap is that a CUDA failure does not surface when the model is constructed.** It surfaces later, inside `transcribe()`. So a `try/except` around the constructor catches nothing, and the tool dies mid-dictation. Both halves are now handled:
+### Phase 0: Freeze and reproduce the baseline
 
-- **Warmup at startup** with half a second of silence, so a broken GPU path fails immediately rather than on the first utterance.
-- **Retry on CPU mid-session**, replaying the same audio. **Falling back must never cost the words that were just spoken.**
+- Preserve the latest aggregate result and command used to produce it.
+- Run all current deterministic suites.
+- Repair the suite runner if it does not invoke every advertised test.
+- Add a test proving the current production setting is not changed by benchmarking.
 
-Before loading, free VRAM is read from `nvidia-smi` and compared against the model's needs plus 400 MB of headroom. Verified against real contention: with `qwen3.5:4b` loaded and 1440 MB free, dictation still ran on the GPU; below the threshold it moves to CPU and says why.
+Exit: the baseline is reproducible and no current user setting or private corpus is committed.
 
-**Deliberately not implemented: automatic downgrade to `base.en`.** The rule in Part 4 stands — `base.en` starts dropping words at this speaking rate, so the fallback trades speed for accuracy by moving to CPU, not accuracy for speed by shrinking the model. The ladder stays available manually via `DICTATE_MODEL`.
+### Phase 1: Make whole-utterance finalization the production path
 
-| Model | Size | Use |
-|---|---|---|
-| `base.en` | ~140 MB | Only if you have tested it against your own speech |
-| `small.en` | ~500 MB | **Default. The right point on this hardware** |
-| `distil-medium.en` | ~750 MB | Try if accuracy is short and VRAM allows |
-| `medium.en` | ~1.5 GB | Too large alongside anything else on 4 GB |
+- Change the default to `stream = false`.
+- Introduce explicit session identifiers and monotonic state transitions.
+- Run VAD once per completed recording.
+- Insert exactly once after F9 release.
+- Retain legacy streaming only behind Advanced settings.
 
-### 3.4 Streaming — done, and behind a switch
+Exit: natural pauses produce no intermediate typing and the existing batch path passes end-to-end tests.
 
-Enabled with `DICTATE_STREAM=1` or `Dictate-Streaming.cmd`. **The batch path is untouched and remains the default**, because it is the one that has been used in anger.
+### Phase 2: Select the recognizer by evidence
 
-**Streaming dictation dies in one specific way: the tool types a guess, changes its mind, and has to unsay it.** Backspacing over text the user can already see produces flicker, races their own typing, and destroys anything they did in the window in between. So the rule is absolute: **nothing is ever retyped or unsaid.** Text is emitted only once it cannot change. That single constraint drives the whole design:
+- Extend model metadata for all three candidates.
+- Benchmark cached candidates first.
+- Ask before downloading missing weights.
+- Compare aggregate, category, latency, RAM, and VRAM results.
+- Select a production model only when every release constraint is met better than the baseline.
 
-- **Pause-finalised, the common case, and it is exact.** Silero VAD watches for a pause of 0.8 s. On a pause the audio is a complete phrase, so it is transcribed once and emitted once. No guessing, no revision.
-- **Stable-prefix, the fallback for long unbroken speech.** Past 12 s without a pause, the buffer is transcribed early and compared with the previous pass; only the words the two passes *agree* on are emitted. This is LocalAgreement-2.
+Exit: one written comparison identifies the winner or truthfully retains `small.en`.
 
-**Measured on a 17.2 s clip, fed in real time through the real worker thread:** first text appeared at **5.3 s — 31% of the way through speaking** — and the last text landed **0.4 s after the final word**. Emissions were append-only, and the streamed transcript had **100% word overlap with a single batch pass**.
+### Phase 3: Build the safe hybrid finalizer
 
-### 3.5 The pill — done
+- Add protected-span masking and restoration.
+- Refactor the local formatter behind one adapter.
+- Add deterministic validation and fallback.
+- Route terminals, secure fields, and structured text away from semantic cleanup.
+- Measure raw, deterministic, and final output separately.
 
-Dictation was invisible: you pressed a key and hoped. A small always-on-top indicator now shows idle / listening (with a timer) / thinking / typed. Drag it anywhere, position is remembered, right-click quits. `DICTATE_HIDE_CONSOLE=1` hides the console so the pill is the only UI.
+Exit: final WER no longer exceeds raw WER and the formatter has zero protected-span mutations in the corpus.
 
-**The entire difficulty is that an always-on-top window steals keyboard focus, which would be fatal here** — everything this tool does is type into the window you were already in, so a pill that takes focus types into itself.
+### Phase 4: Add explicit correction learning
 
-`WS_EX_NOACTIVATE` alone does **not** fix it, and that is the trap. Tracing the foreground window through construction showed it is taken earlier than expected:
+- Add atomic versioned correction storage.
+- Add `Correct last dictation` to tray and settings.
+- Propose only bounded reusable mappings.
+- Require explicit confirmation.
+- Add disable, edit, delete, and reset.
+- Retrieve no more than three relevant approved examples.
 
-| Step | Foreground |
-|---|---|
-| `tk.Tk()` | unchanged |
-| `root.withdraw()` | unchanged |
-| `root.update_idletasks()` | **taken here**, by a window called `tk`, before any style exists |
-| apply `WS_EX_NOACTIVATE` | too late |
-| `ShowWindow(SW_SHOWNOACTIVATE)` | too late |
+Exit: an approved correction is applied on a repeated test phrase and an unapproved edit is never learned.
 
-**`withdraw()` does not save you** — `update_idletasks()` realises and maps the window anyway — and once the foreground is taken, re-asserting the style does not give it back. Both were measured.
+### Phase 5: Finish the minimal product surface
 
-So the fix has two halves, and both are needed: the extended styles (so it cannot be activated by clicking, and stays out of alt-tab), **plus recording the foreground window before creating anything and handing it back with `SetForegroundWindow`.** That second half is what actually returns focus to your document.
+- Make Settings discoverable by left-clicking the tray icon.
+- Reduce normal controls to the six listed in Section 16.
+- Move model and VAD tuning into Advanced.
+- Add visible copied-to-clipboard and degraded-mode states.
+- Add first-run F9 guidance.
 
-`tests/test_overlay.py` asserts the pill never *becomes* the foreground window — deliberately not that the foreground never changes, since you switching apps mid-test is not a failure. **Stable across repeated runs; the first version of this test passed once by luck, which is why it now checks the right thing.**
+Exit: a new user can discover how to dictate, correct, configure, and recover without reading the source code.
 
-### 3.6 Cleanup — done, in three lanes
+### Phase 6: Acceptance and simplification
 
-`DICTATE_POLISH` = `off` / `fast` (default) / `llm`.
+- Run every deterministic test.
+- Run the full private real-voice benchmark.
+- Run focus-change integration trials.
+- Complete the seven-day local use trial.
+- Remove dead branches and settings only after evidence shows they are no longer needed.
+- Update README and BUILD_LOG from measured results only.
 
-**The finding that set the default: most of the mess is mechanical.** Raw output from `small.en` on deliberately disfluent speech looked like:
+Exit: every release gate is reported as pass or gap. No unmeasured accuracy claim is published.
 
-> "So like basically what i'm trying to say is that ah **we need to we need to** finish the report before friday."
+## 24. Multilingual path after English acceptance
 
-The parts a rule can remove with certainty — the `ah`, the repeated `we need to` — cost **1.5 ms**. Asking a 4B model to fix them costs **2 seconds**, because it regenerates every word that was already correct. Generation runs at ~15 tok/s here, so the bill scales with how much you said, not how much was wrong.
+Marathi, Hindi, Hinglish, and Marathi-English remain valuable, but they are not allowed to destabilize the English release.
 
-**What the fast lane deliberately will not touch.** `like`, `basically`, `actually`, `you know` and `I mean` are all real words — "I like this", "looks like rain", "you know the answer". Telling filler from content there needs sentence understanding, which is what the `llm` lane is for. `literally` is never touched either: it is the escape hatch in the command grammar. **12 sentences of look-alike-but-real usage pass through unchanged.**
+The extension path is:
 
-**The `llm` lane, measured on this machine with `qwen3.5:4b` over local Ollama:**
+1. Add a language profile to the recognition interface.
+2. Benchmark multilingual Whisper candidates on a separately recorded local corpus.
+3. Add Unicode insertion before semantic formatting.
+4. Preserve English protected entities inside Devanagari or Roman output.
+5. Add script selection and transliteration only after native-script ASR is measured.
+6. Add a specialist Indic recognizer only if it materially improves a defined failing category.
 
-| | |
-|---|---|
-| Prompt processing | **263 tok/s** — the old "1.4 tok/s" note in this document was wrong |
-| Generation | **15 tok/s** — the bottleneck |
-| Cleanup latency, model resident | **2.1 s** |
-| Cleanup latency, model unloaded | **6 s+**, it times out |
+No current English module should assume ASCII text, but no multilingual model, transliterator, or second ASR service belongs in the English v2 build merely for future-proofing.
 
-That last row is why the model is **preloaded at startup with `keep_alive`**. Ollama unloads an idle model and reloading costs ~11 s, which would silently eat the per-utterance timeout and drop you back to rules without saying why.
-
-Three guards, because a cleanup pass must never cost you your words:
-
-1. **Length cap.** Over 60 words it skips the model rather than stalling.
-2. **Sanity check.** If the output is under 0.4× or over 1.6× the input length, it is rejected — that is a model answering the text rather than editing it.
-3. **Re-snap.** The model mangled a vocabulary term in testing (`Naukri last` → `Naukrilast`), undoing the work that got proper nouns to 100%, so `fuzzy_snap` runs again afterwards.
-
-Any failure at all — unreachable, timeout, empty, rejected — falls back to the rules result.
-
-### 3.7 The pause timer was set wrong
-
-`DICTATE_PAUSE` was 0.8 s. **That was a guess, and a sweep showed it was backwards.** On speech with mid-clause hesitation — commas, thinking pauses, how anyone actually dictates — a 12.3 s clip gave:
-
-| Pause | First text | Chunks | Words kept |
-|---|---|---|---|
-| 0.4 s | **2.5 s** | 4 | 100% |
-| 0.5 s | 7.4 s | 2 | 100% |
-| 0.8 s | **12.2 s** | 1 | 100% |
-
-**At 0.8 s the timer never fires until you stop talking, so streaming bought nothing at all.** At 0.4 s text lands at 2.5 s with no measured loss — it splits at commas, which are natural boundaries, not mid-word. Default is now **0.4 s**.
-
-
-### 3.8 One app, not a pile of launchers
-
-**The honest failure this fixed: the tool had four `.cmd` files and eleven `DICTATE_*` environment variables.** That is a toolkit. Every feature added a switch, and the switches were never given a home.
-
-Now there is one entry point, `Dictate.cmd`, and settings live in `settings.json`, edited by right-clicking the pill. Environment variables still take precedence when set, so every test and tuning note stays valid — but nobody has to use them.
-
-| Was | Now |
-|---|---|
-| `Dictate-Streaming.cmd` | Settings → Speed → *Type as I pause* |
-| `Dictate-Hands-Free.cmd` | Settings → Startup → *Hide the console* |
-| `Dictate-Polished.cmd` | Settings → Cleanup → *Full* |
-| `DICTATE_PAUSE=0.4` | Settings → Speed → slider, with what each end costs |
-| nothing | Settings → Startup → *Start when Windows starts* |
-
-`Dictate-Everywhere.cmd` survives as a separate file because it needs a UAC prompt at launch, which a running app cannot grant itself.
-
-**Settings are deliberately not a popup menu on the pill.** `tk_popup` on a `WS_EX_NOACTIVATE` window **hangs the process outright** — it grabs input that a window which cannot take focus will never receive. That was measured while building this, and the stuck process had to be killed from outside. So settings open as an ordinary window, which is allowed to take focus because you are not dictating while configuring. `tests/test_settings.py` checks the pill still refuses focus after that window has opened and closed.
-
-Changes that can apply live do (cleanup level, pause, snapping, commands); the rest say which ones need a restart rather than silently ignoring them.
-
-
-### 3.9 First real voice, and the two bugs it found immediately
-
-**31 August 2026, 19:41. The tool was used to dictate a real message, and it worked.** `transcript.log` holds two `(streamed)` entries whose text matches what was sent: streaming fired, split at a natural pause, and typed into a chat box.
-
-**That closes the caveat attached to every other number in this document.** Everything above was measured against synthetic Windows SAPI speech at a calibrated 141 WPM, with the standing admission that no real voice had ever been heard. It has now.
-
-**One session of real use found two bugs that eight test suites had not.**
-
-**One — Whisper invents text to fill silence.** Two half-second recordings produced:
-
-```
-(0.5s spoken) So...
-(0.5s spoken) Thank you for watching.
-```
-
-Whisper was trained on subtitles, so given near-silence it writes what appears at the end of videos. **Both were typed into whatever window was focused**, which is the worst failure this tool can have. Fixed with a Silero VAD gate in the batch path — the streaming path already had one — requiring 0.35 s of actual speech, not merely that the key was held long enough. A narrow phrase backstop covers the short clips where VAD is least reliable, and it only fires under one second of speech so it can never eat a real "Yes."
-
-**Two — streamed entries logged no duration**, so the one measurement this project most needed from real use was being thrown away. The log now records seconds, word count and words per minute per phrase.
-
-**This is the loop that matters from here.** Synthetic speech proved the engine; only real use finds bugs like a subtitle artifact being typed into a document. `transcript.log` is now the source of truth for the real speaking rate — worth checking against the 120/147 WPM measured from two years of my own dictation, since a rough read of that first session suggested rather faster.
-
-
-### 3.10 Made it behave like software, not a script
-
-Screenshot feedback, and it was fair: the pill was **sitting in the top-left corner over the title bar** of whatever was behind it, permanently, and a permanently visible indicator is a distraction whichever corner it is in.
-
-Two genuine bugs were behind the first half, and both are the same root cause — trusting tkinter's idea of where a window is:
-
-| Bug | Cause |
-|---|---|
-| Pill stuck at 0,0 | `geometry()` was set while the window was withdrawn and **never applied**, then `SetWindowPos(SWP_NOMOVE)` preserved that un-applied position. `update_idletasks()` after `geometry()` is what makes it real. |
-| Dragging jumped | `winfo_x()` / `winfo_y()` **report 0 for an overrideredirect window**, so the drag offset was always computed from the wrong origin. Now read via `GetWindowRect`. |
-
-The second half was a design error rather than a bug. **The fix is a tray icon.** Real Windows applications live in the notification area: quiet when idle, always reachable, quit from a right-click. So:
-
-- **The tray icon is the app.** Colour follows state; right-click gives Settings, Edit my words, Start with Windows, Quit.
-- **The pill only appears while working.** With the tray carrying the "I exist" job, nothing is on screen at all while you are not dictating.
-
-`pystray` runs its own Win32 message loop and tkinter needs the main thread, so the icon runs on a worker. **Verified they coexist** before building on it — the tray survives a full tkinter mainloop and vice versa. Hiding uses `ShowWindow`, never `withdraw`/`deiconify`, because `deiconify` re-maps the window and takes the foreground.
-
-If `pystray` is missing the app still runs; the pill simply stays visible, since otherwise nothing would show that the tool is alive.
-
-
-### 3.11 The F9 crash, and the test class that was missing
-
-**A NameError shipped past ten passing suites.** A setting was used inside `hotkey_loop` but the line defining it never landed. The app started perfectly and died the instant F9 was pressed:
-
-```
-NameError: name 'VAD_THRESHOLD' is not defined
-```
-
-**Unit tests could not catch this**, because the failure was in the wiring between parts rather than inside any of them, and no test ever entered that function — it only runs on a keypress. So `tests/test_endtoend.py` now does two things nothing else did:
-
-1. **Resolves every global name** each function references, across all eight modules, against what the module actually defines. An unresolvable name is a crash waiting for the right keypress.
-2. **Runs both recording paths for real** — batch and streaming, with real audio, with only the microphone and keyboard replaced. The code F9 reaches is now executed by the suite.
-
-The name checker found three false positives on its first run — `__file__`, and two closure variables — which were fixed in the checker rather than the code. Nested functions are no longer scanned standalone, since they see their parent's locals.
-
-**The crash handler earned its place the same day.** Running detached there is no console, so the traceback would have vanished; instead it landed in `dictate.log`, which is how the bug was diagnosed in one step.
-
-### 3.12 Packaging: a shortcut, not a 1.5 GB executable
-
-Asked for an `.exe` "like Claude has". Measured what one would have to contain:
-
-| | |
-|---|---|
-| `nvidia` (CUDA runtime) | **914.7 MB** |
-| `ctranslate2` | 59.8 MB |
-| `numpy`, `PIL`, rest | 48 MB |
-| **Total, before the speech model** | **1,022 MB** |
-
-A single-file build would be roughly 1.5 GB, would unpack to a temp folder on **every launch**, and would put the already-delicate CUDA DLL discovery behind another layer. It would be a worse program that merely looked more official.
-
-What actually makes software feel installed is being in the Start Menu with its own icon, starting without a console, and running until you quit it. `install.py` does that: a multi-size `.ico`, Start Menu and Desktop shortcuts, and `--remove` to undo. Nothing goes into Program Files, nothing touches the registry.
-
-**The console bug this replaced was real, though.** The old launcher ran `python.exe` in a console window, so closing the window killed the app. It now launches `pythonw.exe` detached and exits immediately — verified by closing the launcher and confirming the process was still alive.
-
-### 3.13 What the app actually stores
-
-Measured rather than assumed, because the worry was that dictation would fill the disk:
-
-| | |
-|---|---|
-| Audio written to disk | **none** — it exists only in memory |
-| Text per utterance | 101 bytes |
-| A peak day (2,789 words) | ~34 KB |
-| A year of heavy use | **~12 MB** |
-
-So storage was never the risk it felt like. Logs are trimmed anyway — about a year of transcript history, 1 MB of diagnostics — because nothing should append forever.
-
-
-### 3.14 What a day of real use actually changed
-
-Everything below came from using the tool, not from testing it. That
-distinction is the point: eleven passing suites did not catch any of it.
-
-**Two copies were running at once.** Both held the global hotkey and both
-typed, so F9 toggled them out of step and one kept recording after the other
-stopped. It looked exactly like broken transcription. A named mutex now
-refuses the second copy. **No amount of model tuning would have fixed this.**
-
-**A test wrote its own audio level into the live settings.** The noise gate
-learned the synthetic corpus at RMS 0.1164; the real microphone measures
-0.0087-0.0123, about ten times quieter. The floor then sat above every real
-phrase and dictation stopped working, with the reason only in a log file.
-Three fixes: `save()` refuses the live file during tests, the gate switches
-itself off if nothing gets through, and rejected phrases now say so on screen.
-
-**A `NameError` shipped past eleven suites**, because no test ever pressed F9.
-`tests/test_endtoend.py` now resolves every global name in every module and
-runs both recording paths for real.
-
-**Voice detection ran twice per phrase**, computing the same answer. One pass
-now, 50% off that step.
-
-**Python is not the bottleneck**, measured on one utterance:
-
-| | |
-|---|---|
-| Model inference (C++/CUDA) | **884 ms — 78.6%** |
-| Voice detection (also a neural net) | 209 ms — 18.6% |
-| **All the Python** | **2.3 ms — 0.2%** |
-
-**Battery barely matters.** Under load the GPU held 1,920 MHz of 2,100 on
-battery against 1,972 on AC, and drew *less* power for the same work.
-
-**A bigger model does not help here.** `medium.en` cost 2.9x the wait and
-592 MB more VRAM and scored one term *worse*; `distil-medium.en` came back at
-92.6% WER, effectively broken in this configuration. The caveat matters:
-`small.en` already scores 0.0% WER on this corpus, so the benchmark cannot
-detect an improvement even if one exists on messier real speech.
-
-**Most vocabulary candidates were already correct.** Mining 250 Obsidian notes
-produced 90 candidates ranked by frequency - and frequency was the wrong
-signal. Speaking each one and transcribing it with no prompt showed Whisper
-already spelled **67 of 90** perfectly. Only 23 needed help, and what it
-misheard became the correction rules for free.
-
-
----
-
-## 4. What my own dictation history showed
-
-**Measured 31 August 2026, from my own usage data on my own machine.**
-
-Before building the accuracy layers I wanted real numbers rather than assumptions, and I had two years of my own dictation sitting locally. Two boundaries were set before looking at anything, and both held:
-
-| | Decision |
-|---|---|
-| **Any vendor's application code** | **Not read.** Decompiling a commercial product to copy its implementation is not the approach here, and nothing in this design came from doing so |
-| **My own settings and usage statistics** | **Read.** This is my data about my own speech, and it is what the design questions actually needed |
-
-The findings below are about *how I speak*. They are the inputs to the design, and none of them describes anyone's product.
-
-### Finding 1: the speaking rate justifies the design
-
-| Measure | Value |
-|---|---|
-| Total words dictated | **16,989** |
-| Reported average | **120 WPM** |
-| Derived from total words over total duration | **147 WPM** |
-| Words in one day | 2,789 |
-
-**At 120 to 147 words per minute, push-to-hold is the wrong interaction and toggle is right.** It also sets the model floor: `small.en` sustains that rate, `base.en` would begin dropping words. **Do not downgrade the model to save VRAM without testing against real speech at this rate.**
-
-### Finding 2: the history is a vocabulary source
-
-**There is 495 MB of dictation history on this machine.** Mining term frequency from it would produce a far better `initial_prompt` than guessing at a word list.
-
-**It also contains everything I have ever dictated, so it is treated as private by default.** Not read, exported or processed without an explicit instruction, and never moved off the machine. In the event the vocabulary was built from my own Obsidian notes instead — see `mine_vocabulary.py` — which answered the same question without touching it.
-
-### Three questions this could not answer
-
-1. What a good command grammar looks like.
-2. Whether formatting should differ per application.
-3. How partial versus final text should be handled in the typing path.
-
-**None of these was answerable from settings data, and the only other place to look would have been a vendor's binaries, which was out of scope by the boundary set above.**
-
-**They stopped being blockers.** The point of asking had been to avoid rediscovering solved problems slowly. In the event, building steps 2 and 4 answered them directly, from measurement rather than from anyone else's implementation:
-
-- **On the command grammar (question 1):** the real problem is not which commands to have, it is that command use and ordinary use are the same words. The determiner guard solves it, and it was cheap to find.
-- **On partial versus final text (question 3):** the answer is that there is no partial text. Nothing is emitted until it cannot change. See 3.4 — this is the constraint the entire streaming design is built on.
-- **Per-application formatting (question 2)** remains genuinely unexplored. It is not implemented and is not currently planned.
-
-## 4a. The original questions, and which ones got answered
-
-**Kept so the reasoning is visible. Questions 1 and 5 are answered in Part 4. The rest were not answerable from the config alone.**
-
-1. **How is custom vocabulary stored and weighted?** Flat list, or per-context?
-2. **What is the command grammar**, and how does it avoid firing on ordinary speech?
-3. **Is there per-application behaviour** — different formatting in a terminal versus a document?
-4. **How is partial versus final text handled** in the typing path, and does it correct in place?
-5. **What does the settings schema cover** that this design has not anticipated?
-
-**The point is not to copy the implementation.** It is to find the decisions that were already made well, so the same problems are not rediscovered slowly.
-
----
-
-## 5. Non-goals
-
-**Not building:** a cloud service, an account system, multi-user support, mobile, or a polished installer. **This is a personal tool on one machine, and that constraint is what makes it finishable.**
-
-**Not doing:** speaker diarisation, translation, real-time captions, or meeting transcription. **They are different products and each would double the work.**
-
----
-
-## 6. Sequence
-
-| Step | Work | State |
-|---|---|---|
-| 0 | Capture, transcribe, type, log, toggle hotkey | **Done** |
-| 1 | Custom vocabulary via `initial_prompt` | **Done. 50% → 100% term recall, control WER unchanged** |
-| 2 | Spoken punctuation and `scratch that` | **Done. 8 commands fire, 6 ambiguous phrasings stay quiet** |
-| 3 | Measure my own dictation history and revise this document | **Done 31 August 2026. See Part 4** |
-| 4 | Streaming with voice-activity detection | **Done, behind `DICTATE_STREAM=1`. First text at 31% of the utterance** |
-| 5 | GPU contention handling and automatic fallback | **Done. Also fixed the latent crash it exposed** |
-| 6 | Always-on-top pill, so the tool is in front | **Done. Never takes keyboard focus** |
-| 7 | Cleanup lanes and a corrected pause default | **Done. Fast lane free, llm lane ~2.1 s** |
-| 8 | Collapse into one app with real settings | **Done. One launcher, settings.json, start-with-Windows** |
-| 9 | Microphone meter, silence guard, real-voice use | **Done. Validated on a real voice 31 Aug 2026** |
-| 10 | Tray icon, auto-hiding pill, position fixes | **Done. Behaves like an installed application** |
-| 11 | Single instance, detached launch, crash surfacing | **Done. Two copies at once was the real cause of the "buggy" session** |
-| 12 | End-to-end test, Start Menu install, data pruning | **Done** |
-| 13 | Noise gate, vocabulary mining, HD pill | **Done. Twelve suites** |
-
-### What is worth doing next
-
-1. **Use it for a real day's work and add what breaks to `vocabulary.txt`.** Every number here is from synthetic speech. The list is currently 15 terms guessed from this document, not mined from real usage.
-2. **Tune `DICTATE_PAUSE` to your own rhythm.** 0.8 s is a reasonable clause boundary, not a measured optimum for this speaker.
-3. **Decide whether streaming becomes the default.** It needs a week of real use before that call is worth making.
-4. **Consider mining `flow.sqlite` for term frequency** — still the best available source for a real vocabulary list, and still untouched pending an explicit instruction.
-
----
-
-## 6a. How to check any of this
-
-```
-Run-Tests.cmd
+## 25. Explicit non-goals
+
+Do not build:
+
+- cloud inference or Oracle hosting;
+- a web account or subscription system;
+- a mobile app;
+- meeting transcription or speaker diarization;
+- continuous microphone listening;
+- screenshot understanding;
+- document-wide context collection;
+- automatic translation;
+- several simultaneous ASR models;
+- a vector database;
+- an agent framework;
+- a plugin marketplace;
+- a custom model-training pipeline;
+- a large installer containing every possible model;
+- speculative text replacement while the user is still speaking.
+
+## 26. Claude Code execution contract
+
+Claude Code can build this, but it must implement this file as an evidence-gated upgrade to the existing application, not start a new project.
+
+Use this prompt only after reviewing this architecture:
+
+```text
+Work in the existing dictate-local repository.
+
+Read AGENTS.md and ARCHITECTURE.md completely before changing anything. ARCHITECTURE.md is the final source of truth. The older multilingual design is superseded research, not the current implementation plan.
+
+Implement the Option 2 lean hybrid finalizer phase by phase, following Section 23 in order. Preserve all working desktop behavior and all user changes. Do not rewrite the application from scratch.
+
+Hard requirements:
+- Keep runtime inference local and unmetered. No cloud API, Oracle dependency, telemetry, account, or subscription.
+- English-first release. Do not implement the multilingual roadmap in this pass.
+- Whole-utterance finalization is the default. Never type speculative partial text or revise text the user may have edited.
+- Use the real-voice evaluation harness as the model and accuracy authority. Keep raw, corrected, and final scores separate.
+- Do not download model weights without asking first.
+- Do not change the production model unless the same-corpus benchmark proves the change.
+- Treat names, numbers, dates, money, negations, addresses, URLs, emails, paths, and identifiers as protected spans.
+- A local formatter is optional and must fail back to deterministic output on timeout, invalid output, or any safety-check failure.
+- Learn only from an explicit Correct last dictation action. Every learned rule must be reversible.
+- Never read, commit, or expose private Career Center files, private evaluation audio, transcripts, settings, model caches, secrets, or local result files.
+- Never use an em dash in code, documentation, tests, output, or commit messages.
+- Use test-driven development for each behavior change.
+- Run the relevant focused test after every change and the complete suite at every phase boundary.
+- Do not claim completion until Section 21 gates have been measured. Report unmet gates plainly.
+
+Before implementation, inspect the working tree and preserve unrelated changes. Produce a concise phase plan naming exact files and tests. Then implement Phase 0 only, show its test and benchmark evidence, and stop for review before Phase 1. Do not commit or push unless explicitly asked.
 ```
 
-Fifteen suites, all offline. The first run generates the speech corpus with the local Windows SAPI voices.
+The first Claude session should perform Phase 0 only. This prevents a large autonomous rewrite from hiding baseline errors or destroying the evidence needed to judge the upgrade.
 
-| Suite | Asks |
-|---|---|
-| `test_vocab` | Do your terms come out right, and does the prompt hurt ordinary speech? |
-| `test_fuzzy` | Does near-miss snapping ever rewrite an ordinary English word? |
-| `test_commands` | Do commands fire, and do they stay quiet on ordinary phrasing? |
-| `test_fallback` | Does a broken or contended GPU degrade instead of crashing? |
-| `test_stream` | Does text appear before you stop talking, and is it ever unsaid? |
-| `test_overlay` | Does the pill ever steal keyboard focus? |
-| `test_polish` | Is filler removed, and are real words ever eaten? |
-| `test_settings` | Do settings persist and apply, and does the pill still refuse focus? |
-| `test_silence` | Does near-silence ever type anything? |
-| `test_noise` | Is a voice across the room ignored without locking you out? |
-| `test_tray` | Does the tray work, and does the pill sit right and hide when idle? |
-| `test_endtoend` | Does every name resolve, and does the F9 path actually run? |
-| `test_resume` | After the lid closes for hours, does F9 still work? |
-| `test_palette` | Is every colour still defined in exactly one place? |
-| `test_limits` | Do malformed input and a forgotten hotkey fail safely? |
+## 27. Final decision
 
-**Every one of these was written after something broke, and each is checked against the bug it exists for** — reverting the fix has to make the test fail, or the test is decoration. `test_palette` and `test_limits` were verified this way against injected regressions before being trusted.
+Yes, build this architecture.
 
-**Note on running the whole suite back to back:** each suite loads its own model, and on a 4 GB card a run can occasionally start before the previous one has released VRAM. If a suite fails once and passes alone, that is what happened.
-
----
-
-## 6b. Three faults that never announced themselves
-
-Found by probing the code rather than by using it, on the last pass before calling v1 finished. **None of them crashes at the moment it happens**, which is exactly why none had ever been reported — the tool just gets quietly worse and says nothing. That is the failure shape worth hunting once the loud bugs are gone.
-
-**One long line in `vocabulary.txt` switched off all vocabulary biasing.** `build_prompt()` walked the terms in order and `break`ed at the first one too big for the 180-token budget. If that term was first in the file, nothing was collected, the prompt came back `None`, and every term went unbiased for the whole session. `mine_vocabulary.py` reads an Obsidian vault, so a base64 blob or a minified line arriving as one enormous "word" is a realistic way in. Now an oversized term is skipped rather than fatal, and `load_vocabulary()` rejects anything past `MAX_TERM_CHARS` (60 — the longest real term in the file is 21).
-
-**A `settings.json` holding `null` killed the app at startup.** `json.load` returns `None` for it, and `key in None` raises `TypeError` — before the log file exists, so there was nothing to read afterwards. A bare string was quieter and worse: `key in "some string"` is a substring test, so it silently matched settings that were never set. Anything that is not a JSON object now falls back to defaults.
-
-**A recording nobody stopped never ended.** The microphone callback appends to an unbounded queue at 64 KB/s, so a forgotten F9 cost about 230 MB an hour and finished with a single transcribe over all of it. Streaming mode capped its own buffer, but streaming is a setting a user can turn off. The hotkey loop already wakes every 150 ms, so it now notices a recording past `MAX_SECONDS` (300 — 600 words at the 120 wpm this was measured at) and stops it through the ordinary path, so what was actually said still gets typed.
-
----
-
-## 6c. One palette, enforced
-
-`dictate_theme.py` opened by claiming its colours were "a single set used by both the pill and the settings window". **That was not true when it was written.** The accent green was spelled out in four files, and in `install.py` it was the tuple `(61, 220, 132)` — a copy that searching for `#3ddc84` could never have found.
-
-The cause was worth fixing rather than working around. The module called `ctypes.windll.dwmapi` **at import time**, so every consumer wrapped the import in `try/except` and needed its own fallback copy of the colours for the case where it failed. Resolving those DLLs lazily removed the guard, and with it the reason the copies existed. `test_palette.py` now enforces the docstring's claim instead of trusting it.
-
----
-
-## 7. Where this sits
-
-**Personal tooling, not career evidence, until an external person uses it.** It is a legitimate portfolio piece under the same rule as everything else in this workspace: **a project becomes proof when someone other than its author uses it and something measurable changes.**
-
-Until then it is a tool that makes the real work faster, which is a good enough reason to have built it.
+The winning product is not the one with the most models or features. It is the smallest system that repeatedly turns Tejas's natural English into trustworthy final text without correction, keeps every byte local, and learns only what Tejas deliberately teaches it.
