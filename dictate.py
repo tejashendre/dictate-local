@@ -774,10 +774,16 @@ def _restart_after_resume():
         print("  restarted %.0fs ago already, not looping" % since)
         return False
 
-    launcher = os.path.join(HERE, "Dictate.cmd")
-    if not os.path.exists(launcher):
-        print("  no launcher next to the app, cannot hand off")
+    script = os.path.join(HERE, "dictate.py")
+    if not os.path.exists(script):
+        print("  cannot find dictate.py next to this file, no hand-off")
         return False
+    # pythonw so the replacement has no console, the same way Dictate.cmd
+    # starts it. sys.executable already is pythonw when launched normally.
+    runner = sys.executable
+    guess = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    if os.path.exists(guess):
+        runner = guess
 
     try:
         with open(_RESTART_MARKER, "w", encoding="utf-8") as f:
@@ -789,12 +795,24 @@ def _restart_after_resume():
           "this one")
     try:
         import subprocess
-        # Wait before launching: the single-instance mutex is held until this
+        # A tiny detached helper that waits, then starts the real app. The
+        # wait matters because the single-instance mutex is held until this
         # process is gone, so a launch that raced us would be refused.
+        #
+        # NOT via cmd. The first version ran
+        # `cmd /c "timeout /t 6 /nobreak >nul & <launcher>"` and never
+        # executed once: timeout needs a console and DETACHED_PROCESS gives
+        # cmd none, and cmd /c mangles the quoting of a path containing a
+        # space, which this one does - "Code Projects". Tested four variants
+        # of that shape and all four silently failed to run. A detached
+        # pythonw runs reliably, so there is no reason to involve a shell.
+        helper = ("import time, subprocess; time.sleep(6); "
+                  "subprocess.Popen([r'%s', r'%s'], cwd=r'%s')"
+                  % (runner, script, HERE))
         subprocess.Popen(
-            ["cmd", "/c", "timeout /t 6 /nobreak >nul & \"%s\"" % launcher],
+            [runner, "-c", helper],
             creationflags=0x00000008 | 0x00000200,   # DETACHED, NEW_GROUP
-            close_fds=True)
+            close_fds=True, cwd=HERE)
     except Exception as e:
         print("  could not spawn the replacement (%s), staying up"
               % type(e).__name__)
