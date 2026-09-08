@@ -1113,17 +1113,43 @@ class Transcriber:
         than losing the process, and the memory is reclaimed on next launch.
         """
         from faster_whisper import WhisperModel
+        import time as _time
         old = self.model
         device, compute, reason = plan_device(self.model_name)
-        try:
-            fresh = WhisperModel(self.model_name, device=device,
-                                 compute_type=compute)
-            import numpy as _np
-            list(fresh.transcribe(_np.zeros(8000, dtype=_np.float32),
-                                  language="en", beam_size=1)[0])
-        except Exception as e:
-            self.on_event("could not rebuild on %s after sleep (%s), using CPU"
-                          % (device, type(e).__name__))
+
+        # Retry rather than fall straight to CPU. Observed on a real resume:
+        # the watchdog fired correctly after 58 minutes of Modern Standby and
+        # the very next line was "could not rebuild on cuda (RuntimeError),
+        # using CPU", which left the whole session at about 2.5x realtime
+        # instead of 12x, with only a log line to say so.
+        #
+        # The GPU is usually fine; the timing is not. Recovery starts within
+        # five seconds of noticing the resume and the driver is often still
+        # reinitialising. Waiting and asking again is the entire fix, and the
+        # worst case costs about eleven seconds before falling back anyway.
+        fresh = None
+        if device != "cpu":
+            for attempt, delay in enumerate((0.0, 3.0, 8.0), start=1):
+                if delay:
+                    _time.sleep(delay)
+                try:
+                    fresh = WhisperModel(self.model_name, device=device,
+                                         compute_type=compute)
+                    import numpy as _np
+                    list(fresh.transcribe(_np.zeros(8000, dtype=_np.float32),
+                                          language="en", beam_size=1)[0])
+                    if attempt > 1:
+                        self.on_event("%s came back on attempt %d"
+                                      % (device, attempt))
+                    break
+                except Exception as e:
+                    fresh = None
+                    self.on_event("%s not ready after sleep (%s), attempt %d "
+                                  "of 3" % (device, type(e).__name__, attempt))
+
+        if fresh is None:
+            self.on_event("could not rebuild on %s after sleep, using CPU. "
+                          "Restart to get the GPU back." % device)
             try:
                 fresh = WhisperModel(self.model_name, device="cpu",
                                      compute_type="int8")
