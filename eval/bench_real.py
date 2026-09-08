@@ -193,7 +193,13 @@ def run_model(name, records, prompt, terms, allow_download=False):
     from faster_whisper import WhisperModel
 
     base_vram = vram_used()
-    device, compute = "cuda", spec.get("compute", "int8_float16")
+    # Take the precision from production rather than from this file's own
+    # table. The table said int8_float16 while the app had moved to int8, so a
+    # benchmark run reported 433 MB and the accuracy of a configuration nobody
+    # was running. A harness that measures something other than the product is
+    # worse than no harness, because its numbers are believed.
+    device = "cuda"
+    compute = getattr(core, "GPU_COMPUTE", spec.get("compute", "int8_float16"))
     t0 = time.time()
     try:
         model = WhisperModel(name, device=device, compute_type=compute)
@@ -220,6 +226,12 @@ def run_model(name, records, prompt, terms, allow_download=False):
         except Exception as e2:
             return {"name": name,
                     "error": "unusable on GPU and CPU: %s" % type(e2).__name__}
+    # One before/after pair on a card that may be shared. When the running app
+    # holds the same GPU, anything it allocates between the two samples lands
+    # in this figure: an int8 run that really used 360 MB was reported as 433
+    # because the live app transcribed something in between. Treat it as an
+    # upper bound, and measure precisions back to back in one process when the
+    # difference is what matters.
     peak_vram = max(0, vram_used() - base_vram)
 
     rules = core.load_corrections()

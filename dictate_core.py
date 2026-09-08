@@ -1002,6 +1002,26 @@ def free_vram_mb():
         return None
 
 
+# Quantisation for the GPU path. int8_float16 was inherited, never measured.
+#
+# Measured 8 September 2026 on 51 real recordings, five precisions, same audio
+# and same decode settings:
+#
+#     compute_type     raw WER   valid WER   exact    VRAM
+#     int8_float16       17.3%       12.1%   34.1%   433 MB
+#     int8               17.3%       12.1%   34.1%   360 MB
+#     float16            17.9%       12.8%   31.7%   584 MB
+#     int8_bfloat16      19.0%       14.2%   26.8%   366 MB
+#     float32            17.9%       12.8%   31.7%  1130 MB
+#
+# Higher precision is worse, which is not the intuition and is the measurement.
+# int8 and int8_float16 produced byte-identical text on all 51 recordings, with
+# speed within 1%, so int8 is 73 MB of VRAM for nothing given up. It also makes
+# the GPU and CPU paths the same precision, which is one less way for them to
+# disagree.
+GPU_COMPUTE = "int8"
+
+
 def plan_device(model_name=None, free_mb=None):
     """Decide where to run. Returns (device, compute_type, reason).
 
@@ -1012,7 +1032,7 @@ def plan_device(model_name=None, free_mb=None):
     if pref == "cpu":
         return "cpu", "int8", "forced by DICTATE_DEVICE=cpu"
     if pref == "cuda":
-        return "cuda", "int8_float16", "forced by DICTATE_DEVICE=cuda"
+        return "cuda", GPU_COMPUTE, "forced by DICTATE_DEVICE=cuda"
 
     try:
         import ctranslate2
@@ -1024,14 +1044,14 @@ def plan_device(model_name=None, free_mb=None):
     if free_mb is None:
         free_mb = free_vram_mb()
     if free_mb is None:
-        return "cuda", "int8_float16", "GPU, free VRAM unknown"
+        return "cuda", GPU_COMPUTE, "GPU, free VRAM unknown"
 
     need = MODEL_VRAM_MB.get(model_name, 600) + VRAM_HEADROOM_MB
     if free_mb < need:
         return ("cpu", "int8",
                 "only %d MB VRAM free, %s needs about %d MB - something else "
                 "holds the card" % (free_mb, model_name, need))
-    return "cuda", "int8_float16", "GPU, %d MB free" % free_mb
+    return "cuda", GPU_COMPUTE, "GPU, %d MB free" % free_mb
 
 
 # Models whose CUDA context died under the machine. Never collected, never
