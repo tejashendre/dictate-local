@@ -126,11 +126,32 @@ def main():
         began, session = None, log
 
     if began and began > exited:
+        # A session that began after the resume is usually someone launching
+        # the app by hand, and there is nothing to judge. But it is also
+        # exactly what a successful hand-off looks like: the old process spawns
+        # a replacement and leaves. Tell them apart by asking whether the
+        # session BEFORE this one said it was handing off.
+        # The session before this one is everything between the second-to-last
+        # header and the last. Slicing to the last header and searching
+        # backwards finds that header itself, which is a one-line window
+        # containing nothing.
+        previous = ""
+        if len(starts) >= 2:
+            previous = log[starts[-2][1]:starts[-1][1]]
+        if "handing off to a fresh process" in previous:
+            print("  the session before this one handed off, and this one")
+            print("  started at %s, after the resume at %s." % (began, exited))
+            print()
+            print("  VERDICT: the hand-off worked. The app replaced itself.")
+            print("  Press F9 and say something to confirm the hotkey came")
+            print("  back with it, which is the part the log cannot show.")
+            return 0
         print("  the app was started AFTER that sleep, at %s," % began)
-        print("  so this instance has not been through one yet.")
+        print("  and the session before it did not hand off, so it was")
+        print("  probably started by hand. Nothing to judge.")
         print()
-        print("  VERDICT: nothing to judge yet. Close the lid, wait a few")
-        print("  minutes, open it, then run this again.")
+        print("  VERDICT: inconclusive. Close the lid, wait a few minutes,")
+        print("  open it, then run this again.")
         return 0
 
     woke = re.findall(r"woke after ([^\n]+), re-arming", session)
