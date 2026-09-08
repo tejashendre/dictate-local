@@ -26,10 +26,43 @@ The answer turned out to be: more than I expected, and the interesting part was 
 
 ---
 
+## In plain terms
+
+Skip this if you read code. Everything below is the same thing said carefully.
+
+**What it is.** A dictation tool. You press one key, talk, press it again, and
+what you said appears wherever your cursor already was. No window of its own, no
+copy and paste, no account.
+
+**Why it exists.** Speech to text is a solved problem if you are willing to send
+your voice to somebody else's computer and pay per minute. This one refuses
+both. Everything happens on the laptop, so client material and research notes
+never leave it, and there is no meter to run out mid sentence.
+
+**The hard part is not the transcription.** Turning audio into words is one
+library call. The work is everything after: putting the words in the *right*
+window when focus has drifted, not stealing the keyboard while doing it, not
+typing anything when you have not spoken, spelling the names and terms a general
+model has no reason to know, and coming back alive after the laptop has slept.
+Roughly nine tenths of this repository is that, and every piece of it exists
+because something failed in real use first.
+
+**What it costs to run.** About 360 MB of graphics memory and a third of a
+second of compute for a normal sentence, on a laptop GPU from the low end of the
+range. It leaves enough room for a local language model to run alongside it.
+
+**What it does not do.** It does not learn. The words it knows come from a text
+file you edit; nothing is inferred from your corrections, and nothing is sent
+anywhere to improve a model. That is a deliberate limit, not an omission: a tool
+that quietly rewrites your vocabulary based on guesses is a tool you cannot
+predict.
+
+---
+
 ## How it works
 
 ```
-mic ──▶ sounddevice ──▶ float32 buffer ──▶ Silero VAD ──▶ faster-whisper (small.en, CUDA int8_float16)
+mic ──▶ sounddevice ──▶ float32 buffer ──▶ Silero VAD ──▶ faster-whisper (small.en, CUDA int8)
                                                 │                       │
                                    F9 release ends the phrase   initial_prompt biasing
                                                 │                       │
@@ -67,8 +100,8 @@ RTX 3050 Laptop, 4 GB VRAM. Every figure is produced by the offline test suite i
 
 | Metric | Measured | Note |
 |---|---|---|
-| **GPU inference** | **11–16× realtime** | ~210 ms per phrase, `small.en` int8_float16 |
-| **VRAM footprint** | **433 MB** | Leaves room for a local LLM alongside |
+| **GPU inference** | **8–16× realtime** | `small.en` int8, measured on battery and on mains |
+| **VRAM footprint** | **360 MB** | `int8`. Five precisions were measured; the two higher-precision ones scored worse |
 | **CPU fallback** | **2.3–2.7× realtime** | Degrades automatically; never crashes the process |
 | **Vocabulary recall** | **50% → 100%** | 7/14 → 14/14 terms across the three layers |
 | **Control WER change** | **0.0%** | No regression on an 89-word ordinary-speech corpus |

@@ -70,9 +70,33 @@ Ordered by how long they took to find, not how bad they looked.
 
 **Half a second of near-silence produced "Thank you for watching."** A YouTube artifact from the training data, typed confidently into whatever was focused. Voice activity detection had to gate the output, not just trim it.
 
-**Sleep killed the process in native code.** After a lid-close, the hotkey stopped working. Fixing that exposed a worse fault underneath: suspend destroys the CUDA context, and touching the old model afterwards crashes with `ucrtbase.dll` / `0xc0000409` and no Python traceback at all. The model now rebuilds on wake, and the dead handle is deliberately leaked rather than freed, because freeing it is itself a call into the destroyed context.
+**Sleep took six attempts, and five of them were correct fixes to the wrong thing.** This is the one worth reading, because the shape of it is more instructive than the bug.
+
+After closing the lid, F9 silently stopped working. The process was alive, the log had no crash, and nothing said anything was wrong.
+
+Fix one: `unhook_all()` cleared the handler table but left the listener's `listening` flag set, so the next `add_hotkey` returned without installing a new OS hook. Fix two: the microphone stream was never reopened. Fix three: `start_if_necessary` was gated on that same flag, so re-arming reported success and did nothing. All three were real bugs. All three were fixed. It kept happening.
+
+Fix four found why: **nothing was calling the recovery routine.** The watchdog inferred sleep from a 60 second jump in the wall clock, and Modern Standby never produces one. Windows stays at low power and keeps scheduling threads, so `time.sleep(5)` keeps returning after five seconds from beginning to end while the keyboard hook is torn down anyway. Four silent failures, and not one line in the log, because the detector never fired. Windows exposes the missing quantity: `GetTickCount64` counts standby, `QueryUnbiasedInterruptTime` does not, and the difference is exactly the time the wall clock cannot see.
+
+It fired on the next sleep and the process crashed in native code. Fix five: the line written to prevent that crash was causing it. `del old` was documented as leaking the dead model deliberately, because freeing its buffers calls into a destroyed CUDA context and kills the process with no traceback. But `del` dropped the last reference, so the deallocator ran immediately. The comment said "never free it" while the statement under it did exactly that. Confirmed from the Windows Application log, and pinned to that statement by what the log did *not* contain: the line printed after it never once appeared.
+
+Fix six stopped trying. Rebuilding a GPU model inside a process whose CUDA context is gone is not survivable from Python: `plan_device` and the model constructor both call into the driver natively, and no `except` catches that. So resume now hands off to a fresh process and exits, which is the only thing that had worked every time. It then failed twice more before working, once because a test wrote a future timestamp into the live restart marker and jammed the loop guard shut, and once because the spawn command had never executed at all: it used `cmd /c "timeout ... & <launcher>"`, and `timeout` needs a console that `DETACHED_PROCESS` removes, while `cmd /c` mangles the quoting of a path containing a space, which this one has.
+
+It now recovers unattended, proven twice, replacing itself about a second after the machine wakes.
+
+**The lesson generalises past this app: before debugging what a recovery path does, check that something calls it.**
 
 **A safety feature locked me out of my own tool.** A noise gate meant to ignore other voices in the room started rejecting mine, because a test had written synthetic audio levels into the live settings file. Three fixes: tests can no longer write live settings, the gate self-disables after repeated rejections, and rejections are now shown on screen instead of happening silently.
+
+**A prompt hint started putting numbers into ordinary sentences.** Three examples of "number to number" were added to the decoding prompt to fix a range that kept coming out wrong. It worked, and it also taught the model to expect a digit before the word "to". Real dictation began producing "1 to mic" for "want to mic", and inventing quantities in sentences that contained none. Measured on one day of use: zero utterances in 138 carried a digit before the change, three in 50 after. Withdrawn. The evaluation corpus had said to keep it, because that corpus is six times denser in numbers than real speech and could not see harm to everything else.
+
+**A quality gate read 100% on a sentence that was wrong.** The check asked whether each spoken number appeared somewhere in the output. A salary band that decoded as "12 to 18, to 16" contains both spoken numbers, so it scored perfectly while being nonsense. The metric measured what was easy rather than what mattered. It now counts numbers that appear having never been said, which is the direction nobody was looking.
+
+**The benchmark was measuring a build nobody ran.** The evaluation harness hardcoded a quantisation setting in its own table while production had moved on, so it reported the accuracy and memory of a configuration that existed only inside the test. A harness that measures something other than the product is worse than no harness, because its numbers get believed.
+
+**Higher precision made it worse.** The GPU quantisation had been inherited, never measured. Five settings tested on the same recordings: the two higher-precision options both scored worse than the compressed one, and plain `int8` produced byte-identical text to what was shipping while using 73 MB less memory. Intuition said the opposite in both directions.
+
+**Four times, a test wrote into a file the running app depends on.** The user's audio calibration, twice. Their dictation history, which is the only record of real speaking rate. And a restart marker, where a test faking the clock two hours forward wrote a future timestamp that jammed a recovery guard shut. Same shape every time: a write path that looks internal, no guard, and nothing that says it happened.
 
 **Three faults that never announced themselves.** Found on the last pass by probing rather than using: one oversized line in `vocabulary.txt` silently switched off *all* vocabulary biasing; a malformed `settings.json` killed startup before the log file existed; and a recording nobody stopped grew unbounded at 64 KB/s. None had ever been reported, because nothing visibly broke.
 
