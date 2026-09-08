@@ -535,7 +535,7 @@ def main():
               "(set DICTATE_STREAM=1 to try it)")
     print("  pill   : %s" % ("appears only while talking. drag to move"
                             if USE_OVERLAY else "off"))
-    print("  quit   : right-click the tray icon, or ESC")
+    print("  quit   : right-click the tray icon")
     if core.is_elevated():
         print("  reach  : everywhere, including admin windows")
     else:
@@ -975,8 +975,14 @@ def hotkey_loop(model, prompt, rules, terms, quit_evt):
 
     try:
         while not quit_evt.is_set():
-            if keyboard.is_pressed("esc"):
-                break
+            # ESC used to quit here. It ran against the global keyboard
+            # state, so pressing Escape in any application at all shut the
+            # tool down: closing a dialog, cancelling a menu, leaving a
+            # full-screen video. Reported as "it randomly turned off", with no
+            # crash in the log and no sleep on the machine, because nothing had
+            # gone wrong. A background tray application must not exit on a key
+            # it never asked for. Quit lives on the tray icon, which is the
+            # only place a user goes looking for it.
             if not toggle.wait(0.15):
                 # Nothing pressed. If a recording is running anyway, this is
                 # the only place that can notice it has run too long: the

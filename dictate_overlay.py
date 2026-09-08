@@ -187,6 +187,23 @@ class Overlay:
 
         root = tk.Tk()
         root.withdraw()
+        # Windows takes a Toplevel's taskbar icon and grouping from the root
+        # window and the process AppUserModelID, not from the Toplevel. The
+        # settings window set its own icon and still showed the Python logo,
+        # because the root never had one and the process was still identifying
+        # as generic Python.
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "TejasHendre.DictateLocal")
+        except Exception:
+            pass
+        try:
+            _icon = os.path.join(HERE, "dictation.ico")
+            if os.path.exists(_icon):
+                root.iconbitmap(default=_icon)
+        except Exception:
+            pass
         root.overrideredirect(True)
         root.attributes("-topmost", True)
         root.configure(bg=BG)

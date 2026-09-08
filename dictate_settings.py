@@ -91,7 +91,10 @@ class SettingsWindow:
         win = tk.Toplevel(root)
         self.win = win
         win.title("Local Dictation")
-        win.resizable(False, False)
+        # Resizable, because it did not fit. Measured on a 1536x864 screen:
+        # the window asked for 857 px against roughly 804 usable once the
+        # taskbar is accounted for, and it could not be resized to recover.
+        win.resizable(True, True)
         win.configure(bg=SURFACE)          # the fix for the light-grey body
 
         icon = os.path.join(HERE, "dictation.ico")
@@ -112,6 +115,18 @@ class SettingsWindow:
 
         self._build_header(outer)
 
+        # Buttons and status first, anchored to the bottom, THEN the notebook
+        # with expand=True. Order matters: packed last they were the first
+        # thing to fall off a screen too short for the window, which is how
+        # Save and Close ended up underneath the taskbar. Anchored first, the
+        # notebook is what gives up space instead.
+        self._build_buttons(outer, side="bottom")
+
+        self.note = ttk.Label(outer, text="", foreground=MUTED,
+                              wraplength=440, justify="left",
+                              font=("Segoe UI", 9))
+        self.note.pack(fill="x", side="bottom", pady=(14, 0))
+
         nb = ttk.Notebook(outer)
         nb.pack(fill="both", expand=True, pady=(16, 0))
         for build, title in ((self._build_speech, "  Speech  "),
@@ -121,15 +136,6 @@ class SettingsWindow:
             nb.add(tab, text=title)
             build(tab)
 
-        self.note = ttk.Label(outer, text="", foreground=MUTED,
-                              wraplength=440, justify="left",
-                              font=("Segoe UI", 9))
-        self.note.pack(fill="x", pady=(14, 0))
-
-        self._build_buttons(outer)
-
-        win.update_idletasks()
-        self._centre(win)
         # Rounded corners, Mica and a dark title bar come from the compositor,
         # and only apply once the window actually exists.
         if theme is not None:
@@ -137,6 +143,12 @@ class SettingsWindow:
                 theme.modernise(win, "window")
             except Exception:
                 pass
+        # Placed LAST. Centring before the theme ran measured the window
+        # mid-layout and put it at x=26 instead of x=527, so a window that had
+        # just been clamped to fit was then positioned so it did not.
+        win.update_idletasks()
+        self._centre(win)
+        win.update_idletasks()
         win.lift()
         win.focus_force()
 
@@ -285,9 +297,9 @@ class SettingsWindow:
                        if v <= 0.9 else
                        "Patient. You lose most of the live typing."))
 
-    def _build_buttons(self, parent):
+    def _build_buttons(self, parent, side="top"):
         row = ttk.Frame(parent)
-        row.pack(fill="x", pady=(16, 0))
+        row.pack(fill="x", side=side, pady=(16, 0))
         ttk.Button(row, text="Quit app", command=self._quit,
                    width=11).pack(side="left")
         ttk.Button(row, text="Close", command=self._close,
@@ -300,11 +312,24 @@ class SettingsWindow:
     # -- helpers ----------------------------------------------------------
 
     def _centre(self, win):
+        """Place it, and make sure it actually fits on this screen.
+
+        Centring alone was not enough: the window asked for more height than
+        the screen had, so it was centred and still ran off the bottom, taking
+        the buttons with it. The height is clamped to what is usable, leaving
+        room for the taskbar, and a minimum size stops it being dragged into
+        uselessness.
+        """
         try:
+            win.update_idletasks()
             sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
             w, h = win.winfo_reqwidth(), win.winfo_reqheight()
-            win.geometry("+%d+%d" % (max(0, (sw - w) // 2),
-                                     max(30, (sh - h) // 3)))
+            usable = max(320, sh - 80)          # taskbar and title bar
+            h = min(h, usable)
+            win.geometry("%dx%d+%d+%d"
+                         % (w, h, max(0, (sw - w) // 2),
+                            max(10, (sh - h) // 3)))
+            win.minsize(min(w, 380), 320)
         except Exception:
             pass
 
