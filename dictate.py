@@ -215,6 +215,25 @@ def apply_settings(new, changed):
     return messages
 
 
+def log_exit(reason):
+    """Record why the app is stopping, once, with a timestamp.
+
+    Every previous shutdown left a log that simply ended, so working out why
+    the tool had vanished meant eliminating causes from the Windows event log
+    rather than reading the answer. That is how a global ESC handler went
+    unnoticed: it exited cleanly and said nothing.
+    """
+    if getattr(log_exit, "_done", False):
+        return
+    log_exit._done = True
+    try:
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print("\n  === exiting at %s: %s ===" % (stamp, reason))
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
 def _gate_phrase(audio, look=None):
     """True when this phrase is the room rather than you.
 
@@ -826,6 +845,7 @@ def _restart_after_resume():
         _rearm()
     except Exception:
         pass
+    log_exit("handing off to a fresh process after standby, this is expected")
     try:
         sys.stdout.flush()
     except Exception:
@@ -969,6 +989,7 @@ def hotkey_loop(model, prompt, rules, terms, quit_evt):
         except Exception as e:
             print("  could not bind %r (%s). Set another key in settings."
                   % (HOTKEY, type(e).__name__))
+            log_exit("could not bind the hotkey %r" % HOTKEY)
             quit_evt.set()
             return
     globals()["_hotkey_suppressed"] = suppressed
@@ -1047,8 +1068,13 @@ def hotkey_loop(model, prompt, rules, terms, quit_evt):
                                         terms)
                 set_state("idle")
     except KeyboardInterrupt:
-        pass
+        log_exit("Ctrl+C in the console")
     finally:
+        # If nothing more specific has been recorded by now, say so rather than
+        # leaving a log that just stops. "quit requested" covers the tray menu
+        # and the settings window, which are the only remaining deliberate
+        # ways out.
+        log_exit("quit requested, or the main loop ended")
         _rec.clear()
         try:
             keyboard.remove_hotkey(HOTKEY)
