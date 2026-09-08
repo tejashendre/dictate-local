@@ -746,14 +746,32 @@ def _restart_after_resume():
     Returns False if it declined, in which case the caller carries on with the
     in-process path and whatever risk that carries.
     """
+    # A test must never write the live marker. tests/test_resume.py fakes the
+    # clock two hours forward to simulate a wake, and while faked this function
+    # wrote that future timestamp here. The guard below then read it back on a
+    # real resume, computed -7487 seconds, decided a restart had just happened,
+    # and refused the hand-off that was meant to fix the bug. Fourth time on
+    # this project that a test has written into a file the running app depends
+    # on, after settings.json twice and transcript.log.
+    if os.environ.get("DICTATE_TESTING") == "1":
+        return False
+
     now = time.time()
     try:
         with open(_RESTART_MARKER, "r", encoding="utf-8") as f:
             last = float(f.read().strip() or 0)
     except Exception:
         last = 0.0
-    if now - last < _RESTART_MIN_GAP_S:
-        print("  restarted %.0fs ago already, not looping" % (now - last))
+
+    # A marker in the future is not a recent restart, it is a corrupt or
+    # rewound clock. Comparing the raw difference treats it as "restarted
+    # moments ago" forever, which is exactly how this jammed.
+    since = now - last
+    if since < 0:
+        print("  restart marker is %.0fs in the future, ignoring it" % -since)
+        since = _RESTART_MIN_GAP_S + 1
+    if since < _RESTART_MIN_GAP_S:
+        print("  restarted %.0fs ago already, not looping" % since)
         return False
 
     launcher = os.path.join(HERE, "Dictate.cmd")
