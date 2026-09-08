@@ -91,7 +91,15 @@ The transcription was the easy half. Everything below was found by using the too
 
 **Silence is not the absence of speech.** Half a second of near-silence produced a confident *"Thank you for watching."*, a YouTube artifact from the training data, which would have been typed into whatever was focused. Voice activity detection had to gate the output, not just trim it.
 
-**Suspend destroys more than you think.** After a lid close, the hotkey silently stopped working. Fixing that revealed a second failure underneath: sleep also destroys the CUDA context, and touching the old model afterwards kills the process in native code with no Python traceback at all, `ucrtbase.dll`, `0xc0000409`. The model now rebuilds on wake, and the dead handle is deliberately leaked rather than freed, because freeing it is itself a call into the destroyed context.
+**Suspend destroys more than you think, and the fix that matters was the one nobody was looking for.** After a lid close, the hotkey silently stopped working. Fixing that revealed a second failure underneath: sleep also destroys the CUDA context, and touching the old model afterwards kills the process in native code with no Python traceback at all, `ucrtbase.dll`, `0xc0000409`. The model rebuilds on wake, and the dead handle is deliberately leaked rather than freed, because freeing it is itself a call into the destroyed context.
+
+That took four attempts, and the first three were all real bugs that all missed the point. Each one improved the recovery routine: clearing the handler table, reopening the microphone, then clearing the listener flag that made `add_hotkey` return without reinstalling the OS hook. Every fix was correct and the failure kept happening, because **nothing was calling the recovery routine at all.**
+
+The watchdog inferred sleep from a wall-clock jump of 60 seconds. Modern Standby does not produce one: Windows stays at low power and keeps scheduling threads, so `time.sleep(5)` keeps returning after five seconds from beginning to end, while the keyboard hook is torn down anyway. Four silent failures, and not one line in the log to show for them, because the detector never fired.
+
+Windows exposes exactly the missing quantity. `GetTickCount64` counts time since boot **including** standby; `QueryUnbiasedInterruptTime` excludes it. The difference is standby, it read 40 hours since boot on this machine, and it moved by less than a millisecond across a second of ordinary running. It caught the next real sleep on the first try, 58 minutes, matching the Kernel-Power log to the minute.
+
+The lesson generalises past this app: three correct fixes to a routine that was never invoked. Before debugging what a recovery path does, check that something calls it.
 
 **A safety feature that fires wrongly is worse than none.** A noise gate added to ignore other voices in the room locked the author out of his own tool, because a test had written synthetic audio levels into the live settings file. It now self-disables after repeated rejections, refuses to write settings while testing, and shows on screen when it rejects something.
 
