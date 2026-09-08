@@ -6,7 +6,7 @@
 
 **Product boundary:** One user, one Windows laptop, English-first dictation, permanently local after model installation, no subscription, no usage quota, and no required server.
 
-**Authority:** This file is the implementation source of truth. It supersedes the earlier v1 architecture narrative and the broad multilingual proposal in `docs/superpowers/specs/2026-09-06-multilingual-accuracy-engine-design.md`. Git history remains the record of how v1 was built.
+**Authority:** This file is the implementation source of truth. It supersedes the earlier v1 architecture narrative and a broad multilingual proposal that was researched and rejected. That proposal has been removed from the working tree rather than left in it: 1,523 lines marked "do not implement" is not design history, it is a second document for a reader to mistake for the plan. Git history remains the record of both it and how v1 was built.
 
 ## 1. Final product promise
 
