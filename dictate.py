@@ -733,6 +733,70 @@ def _rearm():
     return bool(ok)
 
 
+# How recently a resume-restart happened, so a failure to come back cannot
+# become a restart loop. Kept next to the app rather than in memory because the
+# whole point is that the process is replaced.
+_RESTART_MARKER = os.path.join(HERE, ".resume-restart")
+_RESTART_MIN_GAP_S = 90.0
+
+
+def _restart_after_resume():
+    """Hand off to a fresh process rather than rebuild CUDA in this one.
+
+    Returns False if it declined, in which case the caller carries on with the
+    in-process path and whatever risk that carries.
+    """
+    now = time.time()
+    try:
+        with open(_RESTART_MARKER, "r", encoding="utf-8") as f:
+            last = float(f.read().strip() or 0)
+    except Exception:
+        last = 0.0
+    if now - last < _RESTART_MIN_GAP_S:
+        print("  restarted %.0fs ago already, not looping" % (now - last))
+        return False
+
+    launcher = os.path.join(HERE, "Dictate.cmd")
+    if not os.path.exists(launcher):
+        print("  no launcher next to the app, cannot hand off")
+        return False
+
+    try:
+        with open(_RESTART_MARKER, "w", encoding="utf-8") as f:
+            f.write("%f" % now)
+    except Exception:
+        pass
+
+    print("  handing off to a fresh process; the GPU cannot be rebuilt in "
+          "this one")
+    try:
+        import subprocess
+        # Wait before launching: the single-instance mutex is held until this
+        # process is gone, so a launch that raced us would be refused.
+        subprocess.Popen(
+            ["cmd", "/c", "timeout /t 6 /nobreak >nul & \"%s\"" % launcher],
+            creationflags=0x00000008 | 0x00000200,   # DETACHED, NEW_GROUP
+            close_fds=True)
+    except Exception as e:
+        print("  could not spawn the replacement (%s), staying up"
+              % type(e).__name__)
+        return False
+
+    # Re-arm first so the few seconds before the replacement arrives are not
+    # dead, then leave. os._exit rather than sys.exit: interpreter shutdown
+    # would deallocate the model and call into the destroyed CUDA context,
+    # which is the crash this whole path exists to avoid.
+    try:
+        _rearm()
+    except Exception:
+        pass
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    os._exit(0)
+
+
 def _standby_seconds():
     """Total time this machine has spent in low-power standby since boot.
 
@@ -803,12 +867,18 @@ def _watch_for_resume(quit_evt, tick=5.0, gap=60.0, standby_gap=15.0):
             try:
                 _rec.clear()
                 drain()
-                # Rebuild the model FIRST. Sleep destroys the CUDA context,
-                # and the next transcribe against it kills the process in
-                # native code - no traceback, nothing to catch. Everything
-                # else can wait; this cannot.
-                if _model is not None:
-                    _model.reload_after_resume()
+                # Do NOT rebuild the model here. Sleep destroys the CUDA
+                # context, and every route back into it - plan_device's
+                # get_cuda_device_count, the WhisperModel constructor, or
+                # freeing the old model - crashes the process in native code
+                # with no traceback and nothing an except clause can catch.
+                # Five fixes tried; the log shows the fifth still faulting
+                # seven seconds after "re-arming".
+                #
+                # A fresh process has never once failed, so hand off to one.
+                # _restart_after_resume does not return when it succeeds.
+                if _model is not None and _model.device != "cpu":
+                    _restart_after_resume()
                 _rearm()
                 set_state("idle")
             except Exception as e:
