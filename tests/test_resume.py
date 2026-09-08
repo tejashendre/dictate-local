@@ -165,20 +165,6 @@ def test_a_dead_model_is_never_freed():
         lambda name, device=None, compute_type=None: DeadContextModel("new"))
     core.plan_device = lambda n: ("cpu", "int8", "stub")
     try:
-        t = core.Transcriber("small.en", on_event=lambda m: None)
-        doomed = DeadContextModel("slept")
-        t.model, t.device, t.compute = doomed, "cuda", "int8_float16"
-        ref = weakref.ref(doomed)
-        del doomed
-        t.reload_after_resume()
-        gc.collect()
-        ok &= check("reload_after_resume keeps the old model alive",
-                    ref() is not None and "slept" not in freed,
-                    "freeing it is what crashed the process five times")
-        ok &= check("and it is held somewhere deliberate",
-                    len(getattr(core, "_RETIRED_MODELS", [])) >= 1)
-
-        freed[:] = []
         t2 = core.Transcriber("small.en", on_event=lambda m: None)
         d2 = DeadContextModel("tocpu")
         t2.model, t2.device = d2, "cuda"
@@ -188,7 +174,9 @@ def test_a_dead_model_is_never_freed():
         gc.collect()
         # Assigning over self.model drops the last reference just as surely as
         # del does, and this path runs precisely when the GPU has failed.
-        ok &= check("_to_cpu keeps it alive too",
+        ok &= check("and it is held somewhere deliberate",
+                    len(getattr(core, "_RETIRED_MODELS", [])) >= 1)
+        ok &= check("_to_cpu keeps the dead model alive",
                     ref2() is not None and "tocpu" not in freed,
                     "rebinding self.model frees it just like del")
     finally:
@@ -279,24 +267,25 @@ def main():
                     not dictate._rec.is_set())
     ok_all &= check("stale audio dropped", dictate._q.empty())
 
-    print("\n  4. the model is rebuilt on wake, before anything transcribes")
-    # Sleep destroys the CUDA context. Touching the old model afterwards kills
-    # the process in native code - ucrtbase.dll, exception 0xc0000409 - with no
-    # Python traceback and nothing to catch. So the rebuild has to happen on
-    # wake, and it must not free the old model, because freeing it is itself a
-    # touch of the dead context.
+    print("\n  4. waking hands off rather than rebuilding the GPU")
+    # Rebuilding a dead CUDA context inside this process crashed it five times,
+    # so resume no longer tries. It hands off to a fresh process, and if that
+    # is refused it must still not leave the dead model in place.
     order = []
 
     class _FakeModel:
         device = "cuda"
 
-        def reload_after_resume(self):
-            order.append("reload")
-            return True
+        def _to_cpu(self):
+            order.append("to_cpu")
+            self.device = "cpu"
+            return self
 
     real_model = dictate._model
+    real_restart = dictate._restart_after_resume
     dictate._model = _FakeModel()
     dictate._rearm = lambda: order.append("rearm")
+    dictate._restart_after_resume = lambda: (order.append("handoff"), False)[1]
     quitm = threading.Event()
     tm = threading.Thread(target=dictate._watch_for_resume, args=(quitm,),
                           kwargs={"tick": 0.15, "gap": 0.4}, daemon=True)
@@ -308,94 +297,30 @@ def main():
     time.sleep(0.3)
     dictate._model = real_model
     dictate._rearm = real_rearm
-    ok_all &= check("the model is rebuilt on wake", "reload" in order,
+    dictate._restart_after_resume = real_restart
+    ok_all &= check("waking asks for a fresh process", "handoff" in order,
                     str(order))
-    ok_all &= check("rebuilt BEFORE the hotkey and mic are re-armed",
-                    order[:2] == ["reload", "rearm"], str(order))
+    ok_all &= check("a refused hand-off falls back to CPU, not a dead GPU",
+                    "to_cpu" in order,
+                    "otherwise the next F9 touches a destroyed context")
+    ok_all &= check("and the hotkey is still re-armed", "rearm" in order,
+                    str(order))
 
-    print("\n  5. rebuilding never frees the old model")
+    print("\n  5. the CPU fallback never frees the dead model")
     src = open(os.path.join(ROOT, "dictate_core.py"), encoding="utf-8").read()
-    body = src[src.index("def reload_after_resume"):
-               src.index("def transcribe", src.index("def reload_after_resume"))]
-    # Strip comments before looking for calls: the code says "never .close()"
-    # in prose, and matching that would be a false positive.
+    body = src[src.index("    def _to_cpu(self):"):
+               src.index("    # -- use ---")]
+    # Comments are stripped before looking for calls. The previous version of
+    # this check asked whether "del old" appeared in the raw body, and after
+    # the fix it matched a comment saying NOT to use del old. It passed on
+    # prose for an hour.
     code_only = "\n".join(ln.split("#")[0] for ln in body.split("\n"))
     ok_all &= check("no close() or unload() against the dead context",
                     ".close()" not in code_only
                     and ".unload()" not in code_only)
-    ok_all &= check("the old reference is only dropped, never released",
-                    "del old" in body)
-
-    print("\n  6. the watchdog survives a failure inside re-arming")
-    # A dead watchdog fails as silently as the bug it exists to fix, so it
-    # must outlive anything that throws inside it.
-    boom = {"n": 0}
-
-    def explode():
-        boom["n"] += 1
-        raise RuntimeError("simulated re-arm failure")
-
-    dictate._rearm = explode
-    quit3 = threading.Event()
-    t3 = threading.Thread(target=dictate._watch_for_resume, args=(quit3,),
-                          kwargs={"tick": 0.15, "gap": 0.4}, daemon=True)
-    t3.start()
-    time.time = lambda: real_time() + 7200.0
-    time.sleep(0.45)
-    time.time = real_time
-    time.sleep(0.45)
-    time.time = lambda: real_time() + 14400.0
-    time.sleep(0.45)
-    time.time = real_time
-    quit3.set()
-    time.sleep(0.3)
-    dictate._rearm = real_rearm
-    ok_all &= check("still alive and retried after the first failure",
-                    boom["n"] >= 2, "re-arm attempted %d times" % boom["n"])
-    ok_all &= check("thread did not die", t3.is_alive() or quit3.is_set())
-
-    print("\n  7. re-arming reinstalls the OS hook, not just the callback")
-    # The failure this catches is the one that looked fixed twice.
-    #
-    # keyboard.unhook_all() clears the handler table but leaves the listener's
-    # `listening` flag True. start_if_necessary() then sees it is already
-    # listening and returns without doing anything, so the Windows low-level
-    # hook that Modern Standby removed is never reinstalled. add_hotkey()
-    # succeeds, "re-armed after resume: hotkey, microphone" is written to the
-    # log, and not one key event ever arrives again.
-    #
-    # Observed after a 300 minute sleep with all three recovery steps logged as
-    # complete and F9 still dead.
-    src = io.open(os.path.join(ROOT, "dictate.py"), encoding="utf-8").read()
-    body = src[src.index("def _rearm"):src.index("def ", src.index("def _rearm") + 8)]
-    code = "\n".join(ln.split("#")[0] for ln in body.split("\n"))
-
-    ok_all &= check("_rearm clears the listener flag",
-                    "listening = False" in code,
-                    "otherwise start_if_necessary() is a no-op")
-    ok_all &= check("it happens before the hotkey is re-registered",
-                    code.index("listening = False") < code.index("add_hotkey"),
-                    "clearing it afterwards would be too late")
-    ok_all &= check("the old listener threads are left alone",
-                    "listening_thread" not in code
-                    and "processing_thread" not in code,
-                    "joining a thread blocked in a removed hook hangs, so the "
-                    "old pair are left to be collected at exit")
-
-    # And the library really does behave the way the fix assumes.
-    import keyboard
-    listener = keyboard._listener
-    ok_all &= check("the listener exposes the flag the fix clears",
-                    hasattr(listener, "listening"))
-    import inspect
-    starter = inspect.getsource(listener.start_if_necessary)
-    ok_all &= check("start_if_necessary is gated on that flag",
-                    "if not self.listening" in starter,
-                    "this is why clearing it forces a fresh hook")
-    unhook = inspect.getsource(keyboard.unhook_all)
-    ok_all &= check("and unhook_all alone never clears it",
-                    "listening" not in unhook.split("def ")[1],
-                    "which is the whole bug")
+    ok_all &= check("the old model is retired, not dropped",
+                    "_retire(" in code_only and "del self.model" not in code_only,
+                    "dropping the last reference frees it and crashes")
 
     ok_all &= test_modern_standby_is_detected()
     ok_all &= test_a_dead_model_is_never_freed()

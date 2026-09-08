@@ -878,7 +878,20 @@ def _watch_for_resume(quit_evt, tick=5.0, gap=60.0, standby_gap=15.0):
                 # A fresh process has never once failed, so hand off to one.
                 # _restart_after_resume does not return when it succeeds.
                 if _model is not None and _model.device != "cpu":
-                    _restart_after_resume()
+                    # Does not return when it succeeds.
+                    if not _restart_after_resume():
+                        # Refused: the loop guard fired, or there is no
+                        # launcher. Do not leave a model whose CUDA context is
+                        # dead sitting in place, because the next F9 would
+                        # touch it and die in native code that transcribe's
+                        # except cannot catch. _to_cpu builds a CPU model and
+                        # retires the dead one without calling into the GPU at
+                        # all, so it is the only safe move left.
+                        try:
+                            _model._to_cpu()
+                        except Exception as e:
+                            print("  could not fall back to CPU (%s)"
+                                  % type(e).__name__)
                 _rearm()
                 set_state("idle")
             except Exception as e:
