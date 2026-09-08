@@ -117,6 +117,86 @@ def test_modern_standby_is_detected():
     return ok
 
 
+def test_a_dead_model_is_never_freed():
+    """The crash that killed the process on every single resume.
+
+    reload_after_resume knew the rule and wrote it down: after sleep the CUDA
+    context is gone, and freeing the old model's buffers calls into that dead
+    context and kills the process in native code, ucrtbase.dll 0xc0000409,
+    with no Python traceback and nothing an except clause can catch. The stated
+    fix was to leak about 500 MB per sleep rather than lose the process.
+
+    It did not leak. `del old` dropped the only remaining reference, CPython's
+    refcount hit zero, and the deallocator ran on the spot. The line written to
+    prevent the crash was the line causing it.
+
+    Confirmed from the Windows Application log on 8 September 2026: resume at
+    13:15:58, pythonw faulting in ucrtbase.dll at 13:16:04, and the same
+    signature again at 11:59:32. Pinned to the exact statement by what the log
+    does NOT contain: the order is build, assign, `del old`, then print "model
+    rebuilt after sleep", and that final line never appeared once.
+
+    A sentinel object stands in for the model here. Freeing the real one takes
+    the process with it, so the test can never use a real one; what it asserts
+    is that nothing with a dead context is dropped, which is the property.
+    """
+    import gc
+    import weakref
+    import dictate_core as core
+
+    print("\n  5. a model whose GPU context died is never deallocated")
+    ok = True
+    freed = []
+
+    class DeadContextModel:
+        def __init__(self, tag):
+            self.tag = tag
+
+        def __del__(self):
+            freed.append(self.tag)
+
+        def transcribe(self, *a, **k):
+            return iter([]), None
+
+    import faster_whisper
+    real_cls = faster_whisper.WhisperModel
+    real_plan = core.plan_device
+    faster_whisper.WhisperModel = (
+        lambda name, device=None, compute_type=None: DeadContextModel("new"))
+    core.plan_device = lambda n: ("cpu", "int8", "stub")
+    try:
+        t = core.Transcriber("small.en", on_event=lambda m: None)
+        doomed = DeadContextModel("slept")
+        t.model, t.device, t.compute = doomed, "cuda", "int8_float16"
+        ref = weakref.ref(doomed)
+        del doomed
+        t.reload_after_resume()
+        gc.collect()
+        ok &= check("reload_after_resume keeps the old model alive",
+                    ref() is not None and "slept" not in freed,
+                    "freeing it is what crashed the process five times")
+        ok &= check("and it is held somewhere deliberate",
+                    len(getattr(core, "_RETIRED_MODELS", [])) >= 1)
+
+        freed[:] = []
+        t2 = core.Transcriber("small.en", on_event=lambda m: None)
+        d2 = DeadContextModel("tocpu")
+        t2.model, t2.device = d2, "cuda"
+        ref2 = weakref.ref(d2)
+        del d2
+        t2._to_cpu()
+        gc.collect()
+        # Assigning over self.model drops the last reference just as surely as
+        # del does, and this path runs precisely when the GPU has failed.
+        ok &= check("_to_cpu keeps it alive too",
+                    ref2() is not None and "tocpu" not in freed,
+                    "rebinding self.model frees it just like del")
+    finally:
+        faster_whisper.WhisperModel = real_cls
+        core.plan_device = real_plan
+    return ok
+
+
 def main():
     import dictate
     ok_all = True
@@ -318,6 +398,7 @@ def main():
                     "which is the whole bug")
 
     ok_all &= test_modern_standby_is_detected()
+    ok_all &= test_a_dead_model_is_never_freed()
 
     print("\n  %s" % ("PASS" if ok_all else "FAIL"))
     return 0 if ok_all else 1

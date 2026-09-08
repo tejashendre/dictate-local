@@ -1034,6 +1034,28 @@ def plan_device(model_name=None, free_mb=None):
     return "cuda", "int8_float16", "GPU, %d MB free" % free_mb
 
 
+# Models whose CUDA context died under the machine. Never collected, never
+# freed, deliberately kept alive for the life of the process.
+#
+# Freeing one calls into the destroyed context and kills the process in native
+# code, ucrtbase.dll 0xc0000409, with no Python traceback and nothing an except
+# clause can catch. reload_after_resume always said it was leaking the old
+# model; it was not, because `del old` dropped the last reference and CPython
+# deallocated it on the spot. Holding a reference here is what makes the leak
+# real.
+#
+# The cost is about 500 MB of address space per sleep, reclaimed at exit. The
+# alternative is the process dying every time the lid closes, which is what
+# actually happened, five times.
+_RETIRED_MODELS = []
+
+
+def _retire(model):
+    """Keep a model with a dead GPU context alive on purpose."""
+    if model is not None:
+        _RETIRED_MODELS.append(model)
+
+
 class Transcriber:
     """A model that degrades to CPU instead of dying.
 
@@ -1084,6 +1106,11 @@ class Transcriber:
 
     def _to_cpu(self):
         from faster_whisper import WhisperModel
+        # Retire the old one BEFORE rebinding. Assigning over self.model drops
+        # the last reference just as surely as `del` does, and this path runs
+        # when the GPU has already failed, which is exactly when its context
+        # may be the dead one.
+        _retire(self.model)
         self.model = WhisperModel(self.model_name, device="cpu",
                                   compute_type="int8")
         self.device, self.compute, self.degraded = "cpu", "int8", True
@@ -1159,7 +1186,10 @@ class Transcriber:
 
         self.model, self.device, self.compute = fresh, device, compute
         self.degraded = (device == "cpu")
-        del old              # drops our reference; never .close() or free it
+        # NOT `del old`. That was the bug: it drops the last reference, so the
+        # deallocator runs at once and frees GPU buffers in the destroyed
+        # context. Handing it to _retire keeps it alive instead.
+        _retire(old)
         self.on_event("model rebuilt after sleep on %s (%s)" % (device, reason))
         return True
 
