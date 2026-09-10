@@ -31,4 +31,4 @@ set DICTATE_HIDE_CONSOLE=1
 echo.
 echo   Running elevated. F9 works in every window now.
 echo.
-python dictate.py
+py dictate.py

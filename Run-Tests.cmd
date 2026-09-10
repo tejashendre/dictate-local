@@ -19,7 +19,7 @@ echo.
 
 if not exist "tests\audio\control_00.wav" (
     echo   --- building test corpus ---
-    python "tests\make_audio.py"
+    py "tests\make_audio.py"
     echo.
 )
 
@@ -29,7 +29,7 @@ set FAILED=
 
 for %%F in ("tests\test_*.py") do (
     echo   --- %%~nF ---
-    python "tests\%%~nxF"
+    py "tests\%%~nxF"
     if errorlevel 1 (
         set /a FAIL+=1
         set FAILED=!FAILED! %%~nF
