@@ -198,3 +198,5 @@ C-translate2 -> ctranslate2
 iamjobs -> iimjobs
 int8, load16 -> int8 float16
 load16 -> float16
+
+text stag -> tech stack
