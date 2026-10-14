@@ -37,7 +37,10 @@ sys.path.insert(0, ROOT)
 import mine_vocabulary as M  # noqa: E402
 import dictate_core as core  # noqa: E402
 
-REAL_VOCAB = os.path.join(ROOT, "vocabulary.txt")
+# The vocabulary the app actually loads: the personal vocabulary.txt when it
+# exists, otherwise the shared vocabulary.example.txt (a fresh clone has no
+# personal file).
+REAL_VOCAB = core.VOCAB_PATH
 
 
 def digest_of(path):

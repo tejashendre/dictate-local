@@ -152,7 +152,7 @@ Stated plainly, because a project page that only lists strengths is not worth re
 - **English only.** `small.en` is an English model; multilingual dictation is not supported.
 - **Windows only.** It depends on DWM, SendInput and Win32 focus behaviour throughout.
 - **NVIDIA GPU for full speed.** It runs on CPU at 2.3–2.7× realtime, which is usable but noticeably slower.
-- **Vocabulary is manual.** Terms come from a text file you maintain, or from mining your own notes. There is no learning loop.
+- **Vocabulary is manual.** Terms come from a text file you maintain, or from mining your own notes. There is no learning loop. Copy `vocabulary.example.txt` to `vocabulary.txt` and put your own terms in it; `vocabulary.txt` is personal and stays out of git.
 - **No live text by default.** Words appear when you press F9 the second time, not while you talk. Streaming is available in settings, and the reason it is not the default is above.
 - **Single user, single machine.** No sync, no accounts, no telemetry, by design, but it means no cross-device continuity.
 

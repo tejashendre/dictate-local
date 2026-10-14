@@ -652,7 +652,7 @@ def main():
         _tray = dictate_tray.Tray(
             on_settings=lambda: ui.root.after(0, ui._open_settings),
             on_quit=lambda: ui.stop(),
-            on_vocab=lambda: os.startfile(os.path.join(HERE, "vocabulary.txt")),
+            on_vocab=lambda: os.startfile(core.VOCAB_PATH),
             on_toggle_startup=lambda want: dictate_config.set_startup(want),
             startup_enabled=dictate_config.is_startup_enabled)
         if _tray.start():

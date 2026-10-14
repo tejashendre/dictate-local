@@ -44,3 +44,7 @@ corrections.json.*
 recovery.jsonl
 recovery.jsonl.*
 .resume-restart
+
+# Personal vocabulary: names, employers and terms one person dictates. Never
+# tracked. vocabulary.example.txt is the shared starter list.
+vocabulary.txt

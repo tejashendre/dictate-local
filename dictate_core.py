@@ -20,6 +20,10 @@ import site
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VOCAB_PATH = os.path.join(HERE, "vocabulary.txt")
+# vocabulary.txt is personal and kept out of git. Without one, fall back to the
+# shared starter list so the app and the tests still have terms to work with.
+if not os.path.exists(VOCAB_PATH):
+    VOCAB_PATH = os.path.join(HERE, "vocabulary.example.txt")
 
 # initial_prompt shares Whisper's 448-token context and is capped at half of it,
 # so 224 is the hard ceiling. Two limits, and they are different:

@@ -1,0 +1,75 @@
+# Starter vocabulary for Dictate Local.
+#
+# Copy this file to vocabulary.txt and replace the terms with your own.
+# vocabulary.txt is personal and stays out of git (see .gitignore); when it
+# does not exist, the app and the tests fall back to this file.
+#
+# These terms are fed to Whisper as an initial_prompt, which biases decoding
+# toward them. It is a soft bias, not a hard rule. One term per line; blank
+# lines and lines starting with # are ignored. Keep it tight: every term costs
+# prompt budget. Put the most important terms first.
+#
+# Lines with "->" are correction rules, applied after transcription:
+#     heard -> wanted
+#
+# The first fourteen terms and their rules are the ones the test suite
+# measures (tests/phrases.py), so Run-Tests.cmd reproduces the README numbers.
+
+Naukri
+Instahyre
+iimjobs
+ESCP
+Zalando
+PitchBook
+Morningstar
+MicroStrategy
+Arbeitszeugnis
+candidature spontanée
+DEAMIE
+Talent Passport
+n8n
+Cloudflare
+
+# General terms a developer dictates often
+GitHub
+TypeScript
+JavaScript
+Python
+PostgreSQL
+Kubernetes
+Docker
+Redis
+GraphQL
+FastAPI
+Terraform
+Supabase
+Vercel
+Next.js
+PyTorch
+CUDA
+faster-whisper
+Whisper
+LLM
+API
+JSON
+YAML
+VS Code
+Jupyter
+pandas
+NumPy
+Grafana
+Slack
+Notion
+Figma
+LinkedIn
+
+# Correction rules for the test terms
+Mokri -> Naukri
+mokri -> Naukri
+Nokri -> Naukri
+nokri -> Naukri
+iamjobs -> iimjobs
+Deami -> DEAMIE
+Deamy -> DEAMIE
+DME -> DEAMIE
+D M E -> DEAMIE
