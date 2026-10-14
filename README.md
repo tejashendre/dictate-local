@@ -14,7 +14,7 @@ https://github.com/user-attachments/assets/cf21963d-0634-4350-86ac-87d9548198ba
 
 ## Why I built it
 
-I speak at about 120 words a minute and type at roughly half that. Closing that gap with dictation is a solved problem, I had been using a hosted tool happily and it worked well.
+I speak at about 140 words a minute and type at roughly half that. Closing that gap with dictation is a solved problem, I had been using a hosted tool happily and it worked well.
 
 What I wanted to know was **how hard the problem actually is**, and whether the specific constraint I had could be met at all:
 
