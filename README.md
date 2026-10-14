@@ -8,6 +8,15 @@ https://github.com/user-attachments/assets/cf21963d-0634-4350-86ac-87d9548198ba
 
 <sub>20 seconds, silent. The real app recorded on a real Windows machine, including a take with Wi-Fi switched off. If the player does not load, the same file is in [media/dictate-local-demo.mp4](media/dictate-local-demo.mp4). Music: Ramp It Up by Ahjay Stelino (Mixkit).</sub>
 
+<details>
+<summary><b>On a phone?</b> Watch the vertical cut (15 seconds)</summary>
+
+https://github.com/user-attachments/assets/a54ea976-aba7-4778-b98a-3f0111b39316
+
+<sub>Same film recomposed for 9:16. File: [media/dictate-local-demo-9x16.mp4](media/dictate-local-demo-9x16.mp4).</sub>
+
+</details>
+
 **Demo video:** above · **Repository:** you are here · **Author:** [Tejas Hendre](https://www.tejashendre.com/)
 
 ---
