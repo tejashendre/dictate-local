@@ -2,10 +2,13 @@
 
 **Offline speech-to-text for Windows. Runs on a 4 GB laptop GPU, types into any application, and never touches the network after the model downloads.**
 
-Press F9, talk, and the words appear where your cursor already is, in a browser, an IDE, a Word document, a Slack box. No quota, no subscription, no audio leaving the machine.
+Press F9, talk, press F9 again, and the words appear where your cursor already is, in a browser, an IDE, a Word document, a Slack box. No quota, no subscription, no audio leaving the machine.
 
-<!-- Replace with the demo link once recorded -->
-**Demo video:** _coming shortly_ · **Repository:** you are here · **Author:** [Tejas Hendre](https://www.tejashendre.com/)
+https://github.com/user-attachments/assets/cf21963d-0634-4350-86ac-87d9548198ba
+
+<sub>20 seconds, silent. The real app recorded on a real Windows machine, including a take with Wi-Fi switched off. If the player does not load, the same file is in [media/dictate-local-demo.mp4](media/dictate-local-demo.mp4). Music: Ramp It Up by Ahjay Stelino (Mixkit).</sub>
+
+**Demo video:** above · **Repository:** you are here · **Author:** [Tejas Hendre](https://www.tejashendre.com/)
 
 ---
 
@@ -47,7 +50,7 @@ model has no reason to know, and coming back alive after the laptop has slept.
 Roughly nine tenths of this repository is that, and every piece of it exists
 because something failed in real use first.
 
-**What it costs to run.** About 360 MB of graphics memory and a third of a
+**What it costs to run.** About 420 MB of graphics memory and a third of a
 second of compute for a normal sentence, on a laptop GPU from the low end of the
 range. It leaves enough room for a local language model to run alongside it.
 
@@ -64,7 +67,7 @@ predict.
 ```
 mic ──▶ sounddevice ──▶ float32 buffer ──▶ Silero VAD ──▶ faster-whisper (small.en, CUDA int8)
                                                 │                       │
-                                   F9 release ends the phrase   initial_prompt biasing
+                                 2nd F9 press ends the phrase   initial_prompt biasing
                                                 │                       │
                                                 ▼                       ▼
                           corrections ──▶ near-miss snap ──▶ command grammar
@@ -88,7 +91,7 @@ An earlier version emitted text as you paused, so words appeared while you were 
 
 A pause is not the end of a thought. Chunking on one splits a single intended sentence into several independent recognition and cleanup jobs, each of which loses the context the next one needed. Measured by replaying real recordings through both paths, utterances that got split were far worse than the same audio decoded whole, and utterances that happened not to get split were unaffected. Streaming was free right up until it fired.
 
-So the phrase is now the unit: F9 release ends it, and the whole thing is decoded once. Streaming is still there under `stream` in settings for anyone who wants live text and accepts the trade.
+So the phrase is now the unit: a second F9 press ends it, and the whole thing is decoded once. Streaming is still there under `stream` in settings for anyone who wants live text and accepts the trade.
 
 If you already have a `settings.json` from an earlier version, this reaches you through a one-time migration that says on screen what it changed. It applies once, so turning streaming back on afterwards sticks. Changing a default does not reach anyone who already has a settings file, which is a quiet way to ship an improvement to nobody.
 
@@ -101,7 +104,7 @@ RTX 3050 Laptop, 4 GB VRAM. Every figure is produced by the offline test suite i
 | Metric | Measured | Note |
 |---|---|---|
 | **GPU inference** | **8–16× realtime** | `small.en` int8, measured on battery and on mains |
-| **VRAM footprint** | **360 MB** | `int8`. Five precisions were measured; the two higher-precision ones scored worse |
+| **VRAM footprint** | **419 MB** | `int8`, 47-term vocabulary prompt. Five precisions were measured; the two higher-precision ones scored worse |
 | **CPU fallback** | **2.3–2.7× realtime** | Degrades automatically; never crashes the process |
 | **Vocabulary recall** | **50% → 100%** | 7/14 → 14/14 terms across the three layers |
 | **Control WER change** | **0.0%** | No regression on an 89-word ordinary-speech corpus |
@@ -150,7 +153,7 @@ Stated plainly, because a project page that only lists strengths is not worth re
 - **Windows only.** It depends on DWM, SendInput and Win32 focus behaviour throughout.
 - **NVIDIA GPU for full speed.** It runs on CPU at 2.3–2.7× realtime, which is usable but noticeably slower.
 - **Vocabulary is manual.** Terms come from a text file you maintain, or from mining your own notes. There is no learning loop.
-- **No live text by default.** Words appear when you release F9, not while you talk. Streaming is available in settings, and the reason it is not the default is above.
+- **No live text by default.** Words appear when you press F9 the second time, not while you talk. Streaming is available in settings, and the reason it is not the default is above.
 - **Single user, single machine.** No sync, no accounts, no telemetry, by design, but it means no cross-device continuity.
 
 ---
