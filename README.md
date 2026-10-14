@@ -73,16 +73,57 @@ predict.
 
 ## How it works
 
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"fontSize": "15px", "lineColor": "#8b96a8", "textColor": "#e8edf5", "primaryTextColor": "#e8edf5", "secondaryTextColor": "#e8edf5", "tertiaryTextColor": "#e8edf5", "edgeLabelBackground": "#1c1c1c", "clusterBkg": "#12151c", "clusterBorder": "#2a3140"}, "flowchart": {"curve": "basis", "nodeSpacing": 26, "rankSpacing": 60, "padding": 14, "htmlLabels": true}}}%%
+flowchart LR
+    F9(["1st F9<br/>press"]) --> HEAR
+    subgraph HEAR["1 HEAR - pill is green"]
+        direction TB
+        MIC["Microphone"] --> BUF["float32 buffer<br/>16 kHz, mono"]
+        BUF --> VAD["Silero VAD<br/>is anyone speaking?"]
+    end
+    subgraph DECODE["2 DECODE - pill is amber"]
+        direction TB
+        VOCAB["vocabulary.txt<br/>initial_prompt<br/>accuracy layer 1"] -.-> WHISPER
+        WHISPER["faster-whisper<br/>small.en, CUDA int8"] --> FILTER["Ignore stock filler<br/>on very short clips"]
+    end
+    subgraph CLEAN["3 CLEAN - pill is amber"]
+        direction TB
+        RULES["Correction rules<br/>heard to wanted<br/>accuracy layer 2"] --> SNAP["Near-miss snap<br/>0.2 edit ratio<br/>accuracy layer 3"]
+        SNAP --> POLISH["Polish<br/>fillers and stutters"]
+        POLISH --> CMD["Spoken commands<br/>full stop, new line,<br/>scratch that"]
+    end
+    subgraph TYPE["4 TYPE - pill is blue"]
+        direction TB
+        KEYS["keyboard.write()"] --> WIN["Focused window<br/>clipboard untouched"]
+    end
+    HEAR == "2nd F9 press ends the phrase" ==> DECODE
+    DECODE --> CLEAN --> TYPE
+
+    classDef hear fill:#0e2418,stroke:#3ddc84,stroke-width:2px,color:#e8edf5
+    classDef work fill:#2a2008,stroke:#ffb020,stroke-width:2px,color:#e8edf5
+    classDef layer fill:#2a2008,stroke:#ffb020,stroke-width:4px,color:#ffffff
+    classDef done fill:#0b2433,stroke:#4cc2ff,stroke-width:2px,color:#e8edf5
+    classDef key fill:#1c1c1c,stroke:#8b96a8,stroke-width:2px,color:#e8edf5
+    class MIC,BUF,VAD hear
+    class WHISPER,FILTER,POLISH,CMD work
+    class VOCAB,RULES,SNAP layer
+    class KEYS,WIN done
+    class F9 key
+    style HEAR fill:#0a1a11,stroke:#3ddc84,color:#3ddc84
+    style DECODE fill:#1d1606,stroke:#ffb020,color:#ffb020
+    style CLEAN fill:#1d1606,stroke:#ffb020,color:#ffb020
+    style TYPE fill:#08171f,stroke:#4cc2ff,color:#4cc2ff
 ```
-mic ──▶ sounddevice ──▶ float32 buffer ──▶ Silero VAD ──▶ faster-whisper (small.en, CUDA int8)
-                                                │                       │
-                                 2nd F9 press ends the phrase   initial_prompt biasing
-                                                │                       │
-                                                ▼                       ▼
-                          corrections ──▶ near-miss snap ──▶ command grammar
-                                                                        │
-                                            keyboard.write() ──▶ focused window (clipboard untouched)
-```
+
+The pill on screen mirrors these stages: green while it hears you, amber while it works, blue once the text is typed. The thick-bordered boxes are the three accuracy layers described below.
+
+<details>
+<summary>Text version of the diagram</summary>
+
+Press F9, speak, press F9 again. Microphone, float32 buffer (16 kHz, mono) and Silero VAD; faster-whisper (small.en, CUDA int8) biased by `vocabulary.txt` through `initial_prompt` (accuracy layer 1); stock filler dropped on very short clips; correction rules (layer 2); near-miss snap (layer 3); polish (fillers and stutters); spoken commands; `keyboard.write()` into the focused window, clipboard untouched.
+
+</details>
 
 ### Three layers of accuracy, not one
 
